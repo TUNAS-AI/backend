@@ -1,0 +1,2 @@
+import { Router } from "express"; import { requireAuth } from "../../middleware/auth"; import { fieldBlockController } from "./field-block.controller";
+const router = Router(); router.use(requireAuth); router.route("/").get(fieldBlockController.list).post(fieldBlockController.create); router.route("/:id").get(fieldBlockController.get).patch(fieldBlockController.update).delete(fieldBlockController.delete); export default router;

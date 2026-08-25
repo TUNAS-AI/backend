@@ -1,0 +1,159 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  schemas  = ["public", "auth"]
+}
+
+model AuthUser {
+  id              String @id @db.Uuid
+  email           String? @db.Text
+  rawUserMetaData Json?  @map("raw_user_meta_data") @db.JsonB
+  profile         User?  @relation("AuthUserProfile")
+
+  @@map("users")
+  @@schema("auth")
+}
+
+model User {
+  id          String   @id @db.Uuid
+  email       String?  @unique @db.Text
+  displayName String?  @map("display_name") @db.Text
+  locale      String   @default("id") @db.Text
+  timezone    String   @default("Asia/Jakarta") @db.Text
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  authUser    AuthUser @relation("AuthUserProfile", fields: [id], references: [id], onDelete: Cascade)
+  farm        Farm?
+
+  @@map("users")
+  @@schema("public")
+}
+
+model Farm {
+  farmId                    String                       @id @default(uuid()) @map("farm_id") @db.Uuid
+  ownerId                   String                       @unique @map("owner_id") @db.Uuid
+  name                      String                       @db.Text
+  location                  String?                      @db.Text
+  notes                     String?                      @db.Text
+  timezone                  String                       @default("Asia/Jakarta") @db.Text
+  defaultWorkingHours       Json?                        @map("default_working_hours") @db.JsonB
+  defaultWorkerCount        Int                          @default(1) @map("default_worker_count")
+  createdAt                 DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                 DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  owner                     User                         @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  fieldBlocks               FieldBlock[]
+  cropBatches               CropBatch[]
+  fieldObservations         FieldObservation[]
+  buyerCommitments          BuyerCommitment[]
+  weatherSnapshots          WeatherSnapshot[]
+
+  @@map("farms")
+  @@schema("public")
+}
+
+model FieldBlock {
+  fieldBlockId      String             @id @default(uuid()) @map("field_block_id") @db.Uuid
+  farmId            String             @map("farm_id") @db.Uuid
+  name              String             @db.Text
+  areaHectares      Decimal?           @map("area_hectares") @db.Decimal(12, 4)
+  latitude          Decimal            @db.Decimal(9, 6)
+  longitude         Decimal            @db.Decimal(9, 6)
+  notes             String?            @db.Text
+  status            String             @default("active") @db.Text
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+  farm              Farm               @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
+  cropBatches       CropBatch[]       @relation("FieldBlockCropBatches")
+  fieldObservations FieldObservation[] @relation("FieldBlockFieldObservations")
+  weatherSnapshots  WeatherSnapshot[]
+
+  @@unique([farmId, name])
+  @@unique([farmId, fieldBlockId])
+  @@index([farmId])
+  @@map("field_blocks")
+  @@schema("public")
+}
+
+model CropBatch {
+  cropBatchId       String              @id @default(uuid()) @map("crop_batch_id") @db.Uuid
+  farmId            String              @map("farm_id") @db.Uuid
+  fieldBlockId      String              @map("field_block_id") @db.Uuid
+  crop              String              @db.Text
+  variety           String?             @db.Text
+  plantingDate      DateTime?           @map("planting_date") @db.Date
+  notes             String?             @db.Text
+  status            String              @default("active") @db.Text
+  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  farm              Farm                @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
+  fieldBlock        FieldBlock          @relation("FieldBlockCropBatches", fields: [farmId, fieldBlockId], references: [farmId, fieldBlockId], onDelete: Cascade)
+  buyerCommitments  BuyerCommitment[]
+
+  @@index([farmId, fieldBlockId])
+  @@index([fieldBlockId])
+  @@unique([farmId, cropBatchId])
+  @@unique([farmId, fieldBlockId, cropBatchId])
+  @@map("crop_batches")
+  @@schema("public")
+}
+
+model FieldObservation {
+  fieldObservationId String     @id @default(uuid()) @map("field_observation_id") @db.Uuid
+  farmId             String     @map("farm_id") @db.Uuid
+  fieldBlockId       String     @map("field_block_id") @db.Uuid
+  cropBatchId        String?    @map("crop_batch_id") @db.Uuid
+  observationType    String     @map("observation_type") @db.Text
+  observedAt         DateTime   @map("observed_at") @db.Timestamptz(6)
+  payload            Json       @default("{}") @db.JsonB
+  createdAt          DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  farm               Farm       @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
+  fieldBlock         FieldBlock @relation("FieldBlockFieldObservations", fields: [farmId, fieldBlockId], references: [farmId, fieldBlockId], onDelete: Cascade)
+
+  @@index([farmId, observedAt])
+  @@index([fieldBlockId, observedAt])
+  @@index([cropBatchId, observedAt])
+  @@map("field_observations")
+  @@schema("public")
+}
+
+model BuyerCommitment {
+  buyerCommitmentId String    @id @default(uuid()) @map("buyer_commitment_id") @db.Uuid
+  farmId            String    @map("farm_id") @db.Uuid
+  cropBatchId       String    @map("crop_batch_id") @db.Uuid
+  buyerName         String    @map("buyer_name") @db.Text
+  quantityKg        Decimal   @map("quantity_kg") @db.Decimal(14, 3)
+  targetGrade       String?   @map("target_grade") @db.Text
+  deadline          DateTime  @db.Timestamptz(6)
+  notes             String?   @db.Text
+  status            String    @default("active") @db.Text
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  farm              Farm      @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
+  cropBatch         CropBatch @relation(fields: [farmId, cropBatchId], references: [farmId, cropBatchId], onDelete: Cascade)
+
+  @@index([farmId, deadline])
+  @@index([cropBatchId, deadline])
+  @@map("buyer_commitments")
+  @@schema("public")
+}
+
+model WeatherSnapshot {
+  weatherSnapshotId String   @id @default(uuid()) @map("weather_snapshot_id") @db.Uuid
+  farmId            String   @map("farm_id") @db.Uuid
+  fieldBlockId      String   @map("field_block_id") @db.Uuid
+  source            String   @db.Text
+  observedAt        DateTime @map("observed_at") @db.Timestamptz(6)
+  payload           Json     @db.JsonB
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  farm              Farm     @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
+  fieldBlock        FieldBlock @relation(fields: [farmId, fieldBlockId], references: [farmId, fieldBlockId], onDelete: Cascade)
+
+  @@index([farmId, observedAt])
+  @@index([fieldBlockId, observedAt])
+  @@map("weather_snapshots")
+  @@schema("public")
+}

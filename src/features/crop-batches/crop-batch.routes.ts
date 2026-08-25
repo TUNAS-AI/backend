@@ -1,0 +1,2 @@
+import { Router } from "express"; import { requireAuth } from "../../middleware/auth"; import { cropBatchController } from "./crop-batch.controller";
+const router = Router(); router.use(requireAuth); router.route("/").get(cropBatchController.list).post(cropBatchController.create); router.route("/:id").get(cropBatchController.get).patch(cropBatchController.update).delete(cropBatchController.delete); export default router;
