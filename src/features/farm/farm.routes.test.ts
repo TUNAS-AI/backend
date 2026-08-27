@@ -21,12 +21,9 @@ test("documents explicit table routes and farm notes", async () => {
   const server = createServer(app); server.listen(0, "127.0.0.1"); await once(server, "listening");
   try {
     const address = server.address(); assert.ok(address && typeof address === "object");
-    const document = await (await fetch(`http://127.0.0.1:${address.port}/api/openapi.json`)).json() as { tags: Array<{ name: string }>; paths: Record<string, unknown>; components: { schemas: { FarmCreateInput: { properties: { notes: { nullable: boolean } } } } } };
+    const document = await (await fetch(`http://127.0.0.1:${address.port}/api/openapi.json`)).json() as { paths: Record<string, unknown>; components: { schemas: { FarmCreateInput: { properties: { notes: { nullable: boolean } } } } } };
     for (const path of ["/api/farm", "/api/onboarding", "/api/field-blocks", "/api/field-blocks/{id}", "/api/crop-batches", "/api/crop-batches/{id}", "/api/buyer-commitments", "/api/buyer-commitments/{id}"]) assert.ok(document.paths[path]);
     assert.equal(document.paths["/api/farms"], undefined);
-    assert.equal(document.paths["/api/missions"], undefined);
-    assert.equal(document.paths["/api/mission-previews/interpret"], undefined);
-    assert.deepEqual(document.tags.map(({ name }) => name), ["Authentication", "Onboarding", "Farms", "Field blocks", "Crop batches", "Buyer commitments", "System"]);
     assert.equal(document.components.schemas.FarmCreateInput.properties.notes.nullable, true);
   } finally { server.close(); await once(server, "close"); }
 });

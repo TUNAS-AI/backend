@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { getAgentModelConfig } from "../../agent/runtime";
 import { getPrisma } from "../../infrastructure/prisma";
 
 export function getHealth(_request: Request, response: Response) {
@@ -12,12 +13,11 @@ export function getHealth(_request: Request, response: Response) {
 
 export async function getReadiness(_request: Request, response: Response) {
   try {
-    if (!process.env.DATABASE_URL?.trim()) {
-      throw new Error("DATABASE_URL is required");
-    }
+    getAgentModelConfig();
+    if (!process.env.DATABASE_URL?.trim() || !process.env.SUPABASE_URL?.trim() || !process.env.SUPABASE_ANON_KEY?.trim() || !process.env.MISSION_PREVIEW_SECRET?.trim()) throw new Error("Required mission configuration is missing");
     await getPrisma().$queryRaw`SELECT 1`;
     response.status(200).json({ status: "ready", service: "hijau-ai-backend" });
   } catch {
-    response.status(503).json({ status: "not_ready", error: "Database dependency is not ready" });
+    response.status(503).json({ status: "not_ready", error: "Mission service dependencies are not ready" });
   }
 }

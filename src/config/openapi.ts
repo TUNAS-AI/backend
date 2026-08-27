@@ -38,7 +38,7 @@ export const openApiDocument = swaggerJSDoc({
       description: "The web app uses Google sign-in through its frontend callback. Swagger has its own browser-only token handoff.",
     },
     servers: [{ url: "http://localhost:3000", description: "Local development" }],
-    tags: [{ name: "Authentication" }, { name: "Onboarding" }, { name: "Farms" }, { name: "Field blocks" }, { name: "Crop batches" }, { name: "Buyer commitments" }, { name: "System" }],
+    tags: [{ name: "Authentication" }, { name: "Onboarding" }, { name: "Farms" }, { name: "Field blocks" }, { name: "Crop batches" }, { name: "Buyer commitments" }, { name: "Missions" }, { name: "System" }],
     components: {
       securitySchemes: {
         bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" },
@@ -210,6 +210,36 @@ export const openApiDocument = swaggerJSDoc({
             status: { type: "string" },
           },
         },
+        MissionPreviewMessageInput: {
+          type: "object", required: ["role", "content"], additionalProperties: false,
+          properties: { role: { type: "string", enum: ["farmer", "assistant"] }, content: { type: "string", minLength: 1, maxLength: 4000 } },
+        },
+        MissionPreviewFactsInput: {
+          type: "object", required: ["fieldBlockId", "cropBatchIds", "buyerCommitmentId", "maturity", "buyerQuantityKg", "marketQuality", "plannedHarvestKg", "plannedDriedKg", "deadline", "availableWorkerCount", "coveredDryingCapacityKg", "notes", "clarification"], additionalProperties: false,
+          properties: {
+            fieldBlockId: { type: "string", format: "uuid", nullable: true }, cropBatchIds: { type: "array", maxItems: 12, items: { type: "string", format: "uuid" } }, buyerCommitmentId: { type: "string", format: "uuid", nullable: true },
+            maturity: { type: "string", nullable: true }, buyerQuantityKg: { type: "number", exclusiveMinimum: true, minimum: 0, nullable: true }, marketQuality: { type: "string", nullable: true }, plannedHarvestKg: { type: "number", exclusiveMinimum: true, minimum: 0, nullable: true }, plannedDriedKg: { type: "number", exclusiveMinimum: true, minimum: 0, nullable: true }, deadline: { oneOf: [{ type: "string", format: "date-time" }, { type: "string", format: "date" }, { type: "null" }] }, availableWorkerCount: { type: "integer", minimum: 1, nullable: true }, coveredDryingCapacityKg: { type: "number", exclusiveMinimum: true, minimum: 0, nullable: true }, notes: { type: "string", nullable: true },
+            clarification: { type: "object", nullable: true, required: ["key", "question"], properties: { key: { type: "string" }, question: { type: "string" } } },
+          },
+        },
+        MissionFactBlockInput: {
+          type: "object", required: ["key", "value", "provenance", "confidence"], additionalProperties: false,
+          properties: { key: { type: "string" }, value: {}, provenance: { type: "string", enum: ["FARMER_REPORTED", "INFERRED"] }, confidence: { type: "string", enum: ["high", "medium", "low"] } },
+        },
+        MissionFactReview: {
+          type: "object", required: ["key", "status", "reason", "provenance", "confidence"], additionalProperties: false,
+          properties: { key: { type: "string", enum: ["fieldBlockId", "cropBatchIds", "buyerCommitmentId", "maturity", "buyerQuantityKg", "marketQuality", "plannedHarvestKg", "plannedDriedKg", "deadline", "availableWorkerCount", "coveredDryingCapacityKg", "notes"] }, status: { type: "string", enum: ["confirmed", "needs_clarification", "missing"] }, reason: { type: "string" }, provenance: { type: "string", enum: ["FARMER_REPORTED", "INFERRED"] }, confidence: { type: "string", enum: ["high", "medium", "low"] } },
+        },
+        MissionPreviewCandidateInput: {
+          type: "object", required: ["previewId", "messages", "facts"], additionalProperties: false,
+          properties: { previewId: { type: "string", format: "uuid" }, messages: { type: "array", minItems: 1, maxItems: 40, items: { $ref: "#/components/schemas/MissionPreviewMessageInput" } }, facts: { $ref: "#/components/schemas/MissionPreviewFactsInput" } },
+        },
+        MissionPreviewInterpretInput: { type: "object", required: ["message"], additionalProperties: false, properties: { previewId: { type: "string", format: "uuid" }, messages: { type: "array", maxItems: 39, items: { $ref: "#/components/schemas/MissionPreviewMessageInput" } }, facts: { $ref: "#/components/schemas/MissionPreviewFactsInput" }, message: { type: "string", minLength: 1, maxLength: 4000, example: "Panen 80 kg besok dari Blok Timur." } } },
+        MissionPreviewPlanInput: { type: "object", required: ["candidate"], additionalProperties: false, properties: { candidate: { $ref: "#/components/schemas/MissionPreviewCandidateInput" } } },
+        MissionConfirmInput: { type: "object", required: ["previewToken", "planId"], properties: { previewToken: { type: "string" }, planId: { type: "string", format: "uuid" } } },
+        MissionStageInput: { type: "object", required: ["stage"], properties: { stage: { type: "string", enum: ["HARVESTING", "DRYING", "FINISHED", "TO_REVIEW"] } } },
+        MissionStepStatusInput: { type: "object", required: ["status"], properties: { status: { type: "string", enum: ["IN_PROGRESS", "COMPLETED"] } } },
+        MissionCloseoutInput: { type: "object", required: ["actualHarvestKg", "actualDriedKg"], properties: { actualHarvestKg: { type: "number", minimum: 0 }, actualDriedKg: { type: "number", minimum: 0 }, notes: { type: "string" } } },
       },
     },
     paths: {
@@ -270,11 +300,22 @@ export const openApiDocument = swaggerJSDoc({
       "/api/crop-batches/{id}": resourceEndpoints("Crop batches", "a crop batch", "CropBatchUpdateInput"),
       "/api/buyer-commitments": collectionEndpoints("Buyer commitments", "buyer commitments", "a buyer commitment", "BuyerCommitmentCreateInput"),
       "/api/buyer-commitments/{id}": resourceEndpoints("Buyer commitments", "a buyer commitment", "BuyerCommitmentUpdateInput"),
+      "/api/missions": {
+        get: dataOperation("Missions", "List the caller's missions", { 200: { description: "Missions" } }),
+        post: { ...dataOperation("Missions", "Confirm a signed planning preview", { 201: { description: "Active waiting mission created" }, 409: { description: "Preview is expired or invalid" } }), requestBody: jsonRequest("MissionConfirmInput") },
+      },
+      "/api/missions/{id}": { get: { ...dataOperation("Missions", "Get a mission", { 200: { description: "Mission" }, 404: { description: "Mission not found" } }), parameters: [resourceIdParameter] } },
+      "/api/mission-previews/interpret": { post: { ...dataOperation("Missions", "Interpret a client-held mission preview", { 200: { description: "Updated fact blocks" } }), requestBody: jsonRequest("MissionPreviewInterpretInput") } },
+      "/api/mission-previews/plan": { post: { ...dataOperation("Missions", "Generate a signed weather-aware preview", { 200: { description: "Plans and confirmation token" }, 409: { description: "Preview is incomplete" } }), requestBody: jsonRequest("MissionPreviewPlanInput") } },
+      "/api/missions/{id}/stage": { post: { ...dataOperation("Missions", "Advance an active mission stage", { 200: { description: "Updated mission" }, 409: { description: "Invalid stage transition" } }), parameters: [resourceIdParameter], requestBody: jsonRequest("MissionStageInput") } },
+      "/api/missions/{id}/steps/{stepId}/status": { post: { ...dataOperation("Missions", "Advance a current-stage mission step", { 200: { description: "Updated mission" }, 409: { description: "Invalid step transition" } }), parameters: [resourceIdParameter, { in: "path", name: "stepId", required: true, schema: { type: "string", format: "uuid" } }], requestBody: jsonRequest("MissionStepStatusInput") } },
+      "/api/missions/{id}/closeout": { post: { ...dataOperation("Missions", "Record a closeout and generate its AI summary", { 200: { description: "Mission awaiting closeout confirmation" }, 409: { description: "Mission is not ready for closeout" } }), parameters: [resourceIdParameter], requestBody: jsonRequest("MissionCloseoutInput") } },
+      "/api/missions/{id}/closeout/confirm": { post: { ...dataOperation("Missions", "Confirm a reviewed closeout summary", { 200: { description: "Completed mission" }, 409: { description: "Closeout summary is not ready" } }), parameters: [resourceIdParameter] } },
       "/health": {
         get: { tags: ["System"], summary: "Health check", responses: { 200: { description: "Service is healthy" } } },
       },
       "/health/ready": {
-        get: { tags: ["System"], summary: "Database readiness", responses: { 200: { description: "The database is ready" }, 503: { description: "The database is not ready" } } },
+        get: { tags: ["System"], summary: "Mission dependency readiness", responses: { 200: { description: "Mission dependencies are ready" }, 503: { description: "Mission dependencies are not ready" } } },
       },
       "/": {
         get: { tags: ["System"], summary: "Service information", responses: { 200: { description: "Service metadata" } } },

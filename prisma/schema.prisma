@@ -50,8 +50,199 @@ model Farm {
   fieldObservations         FieldObservation[]
   buyerCommitments          BuyerCommitment[]
   weatherSnapshots          WeatherSnapshot[]
+  missions                  Mission[]
 
   @@map("farms")
+  @@schema("public")
+}
+
+model Mission {
+  missionId       String                @id @default(uuid()) @map("mission_id") @db.Uuid
+  farmId          String                @map("farm_id") @db.Uuid
+  fieldBlockId    String?               @map("field_block_id") @db.Uuid
+  buyerCommitmentId String?             @map("buyer_commitment_id") @db.Uuid
+  status          String                @default("ACTIVE") @db.Text
+  stage           String                @default("WAITING") @db.Text
+  originalMessage String                @map("original_message") @db.Text
+  notes           String?               @db.Text
+  approvedPlanId  String?               @map("approved_plan_id") @db.Uuid
+  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+  farm            Farm                  @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
+  fieldBlock      FieldBlock?           @relation("MissionFieldBlock", fields: [farmId, fieldBlockId], references: [farmId, fieldBlockId])
+  buyerCommitment BuyerCommitment?      @relation("MissionBuyerCommitment", fields: [farmId, buyerCommitmentId], references: [farmId, buyerCommitmentId])
+  cropBatches     MissionCropBatch[]    @relation("MissionCropBatches")
+  messages        MissionMessage[]
+  clarifications  MissionClarification[]
+  constraints     MissionConstraint[]
+  planningRuns    PlanningRun[]
+  plans           Plan[]
+  missionSteps    MissionStep[]
+  closeout        MissionCloseout?
+
+  @@index([farmId, createdAt])
+  @@unique([farmId, missionId])
+  @@map("missions")
+  @@schema("public")
+}
+
+model MissionCropBatch {
+  missionId   String    @map("mission_id") @db.Uuid
+  farmId      String    @map("farm_id") @db.Uuid
+  cropBatchId String    @map("crop_batch_id") @db.Uuid
+  mission     Mission   @relation("MissionCropBatches", fields: [farmId, missionId], references: [farmId, missionId], onDelete: Cascade)
+  cropBatch   CropBatch @relation("MissionCropBatches", fields: [farmId, cropBatchId], references: [farmId, cropBatchId])
+
+  @@id([missionId, cropBatchId])
+  @@index([farmId, cropBatchId])
+  @@map("mission_crop_batches")
+  @@schema("public")
+}
+
+model MissionMessage {
+  missionMessageId String   @id @default(uuid()) @map("mission_message_id") @db.Uuid
+  missionId        String   @map("mission_id") @db.Uuid
+  role             String   @db.Text
+  content          String   @db.Text
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  mission          Mission  @relation(fields: [missionId], references: [missionId], onDelete: Cascade)
+
+  @@index([missionId, createdAt])
+  @@map("mission_messages")
+  @@schema("public")
+}
+
+model MissionClarification {
+  missionClarificationId String   @id @default(uuid()) @map("mission_clarification_id") @db.Uuid
+  missionId              String   @map("mission_id") @db.Uuid
+  key                    String   @db.Text
+  question               String   @db.Text
+  answer                 String?  @db.Text
+  status                 String   @default("OPEN") @db.Text
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  answeredAt             DateTime? @map("answered_at") @db.Timestamptz(6)
+  mission                Mission  @relation(fields: [missionId], references: [missionId], onDelete: Cascade)
+
+  @@index([missionId, status])
+  @@map("mission_clarifications")
+  @@schema("public")
+}
+
+model MissionConstraint {
+  missionConstraintId String   @id @default(uuid()) @map("mission_constraint_id") @db.Uuid
+  missionId           String   @map("mission_id") @db.Uuid
+  key                 String   @db.Text
+  value               Json     @db.JsonB
+  provenance          String   @default("INFERRED") @db.Text
+  confidence          String   @default("medium") @db.Text
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  mission             Mission  @relation(fields: [missionId], references: [missionId], onDelete: Cascade)
+
+  @@unique([missionId, key])
+  @@map("mission_constraints")
+  @@schema("public")
+}
+
+model PlanningRun {
+  planningRunId String    @id @default(uuid()) @map("planning_run_id") @db.Uuid
+  missionId     String    @map("mission_id") @db.Uuid
+  status        String    @default("PENDING") @db.Text
+  error         String?   @db.Text
+  traceId       String?   @map("trace_id") @db.Text
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  completedAt   DateTime? @map("completed_at") @db.Timestamptz(6)
+  mission       Mission   @relation(fields: [missionId], references: [missionId], onDelete: Cascade)
+  plans         Plan[]
+
+  @@index([missionId, createdAt])
+  @@map("planning_runs")
+  @@schema("public")
+}
+
+model Plan {
+  planId        String      @id @default(uuid()) @map("plan_id") @db.Uuid
+  missionId     String      @map("mission_id") @db.Uuid
+  planningRunId String      @map("planning_run_id") @db.Uuid
+  name          String      @db.Text
+  summary       String      @db.Text
+  recommended   Boolean     @default(false)
+  assumptions   Json        @default("[]") @db.JsonB
+  risks         Json        @default("{}") @db.JsonB
+  dryingEstimateDays Decimal @map("drying_estimate_days") @db.Decimal(5, 2)
+  dryingEstimateReason String @map("drying_estimate_reason") @db.Text
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  mission       Mission     @relation(fields: [missionId], references: [missionId], onDelete: Cascade)
+  planningRun   PlanningRun @relation(fields: [planningRunId], references: [planningRunId], onDelete: Cascade)
+  steps         PlanStep[]
+
+  @@index([missionId, createdAt])
+  @@map("plans")
+  @@schema("public")
+}
+
+model PlanStep {
+  planStepId    String   @id @default(uuid()) @map("plan_step_id") @db.Uuid
+  planId        String   @map("plan_id") @db.Uuid
+  sequence      Int
+  title         String   @db.Text
+  description   String   @db.Text
+  scheduleType  String   @default("DAILY_WINDOW") @map("schedule_type") @db.Text
+  startsOn      DateTime @map("starts_on") @db.Date
+  endsOn        DateTime @map("ends_on") @db.Date
+  windowStart   String?  @map("window_start") @db.Text
+  windowEnd     String?  @map("window_end") @db.Text
+  timezone      String   @db.Text
+  isConditional Boolean  @default(false) @map("is_conditional")
+  stage         String   @default("HARVESTING") @db.Text
+  calendarSyncStatus    String   @default("NOT_REQUESTED") @map("calendar_sync_status") @db.Text
+  googleCalendarEventId String?  @map("google_calendar_event_id") @db.Text
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  plan          Plan     @relation(fields: [planId], references: [planId], onDelete: Cascade)
+
+  @@unique([planId, sequence])
+  @@map("plan_steps")
+  @@schema("public")
+}
+
+model MissionStep {
+  missionStepId          String   @id @default(uuid()) @map("mission_step_id") @db.Uuid
+  missionId              String   @map("mission_id") @db.Uuid
+  sourcePlanStepId       String   @map("source_plan_step_id") @db.Uuid
+  sequence               Int
+  title                  String   @db.Text
+  description            String   @db.Text
+  scheduleType           String   @default("DAILY_WINDOW") @map("schedule_type") @db.Text
+  startsOn               DateTime @map("starts_on") @db.Date
+  endsOn                 DateTime @map("ends_on") @db.Date
+  windowStart            String?  @map("window_start") @db.Text
+  windowEnd              String?  @map("window_end") @db.Text
+  timezone               String   @db.Text
+  isConditional          Boolean  @default(false) @map("is_conditional")
+  stage                  String   @default("HARVESTING") @db.Text
+  status                 String   @default("SCHEDULED") @db.Text
+  calendarSyncStatus     String   @default("NOT_REQUESTED") @map("calendar_sync_status") @db.Text
+  googleCalendarEventId  String?  @map("google_calendar_event_id") @db.Text
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  mission                Mission  @relation(fields: [missionId], references: [missionId], onDelete: Cascade)
+
+  @@unique([missionId, sequence])
+  @@map("mission_steps")
+  @@schema("public")
+}
+
+model MissionCloseout {
+  missionCloseoutId String   @id @default(uuid()) @map("mission_closeout_id") @db.Uuid
+  missionId         String   @unique @map("mission_id") @db.Uuid
+  plannedHarvestKg  Decimal  @map("planned_harvest_kg") @db.Decimal(14, 3)
+  plannedDriedKg    Decimal  @map("planned_dried_kg") @db.Decimal(14, 3)
+  actualHarvestKg   Decimal  @map("actual_harvest_kg") @db.Decimal(14, 3)
+  actualDriedKg     Decimal  @map("actual_dried_kg") @db.Decimal(14, 3)
+  notes             String?  @db.Text
+  summary           Json     @map("summary") @db.JsonB
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  mission           Mission  @relation(fields: [missionId], references: [missionId], onDelete: Cascade)
+
+  @@map("mission_closeouts")
   @@schema("public")
 }
 
@@ -70,6 +261,7 @@ model FieldBlock {
   cropBatches       CropBatch[]       @relation("FieldBlockCropBatches")
   fieldObservations FieldObservation[] @relation("FieldBlockFieldObservations")
   weatherSnapshots  WeatherSnapshot[]
+  missions          Mission[]          @relation("MissionFieldBlock")
 
   @@unique([farmId, name])
   @@unique([farmId, fieldBlockId])
@@ -92,6 +284,7 @@ model CropBatch {
   farm              Farm                @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
   fieldBlock        FieldBlock          @relation("FieldBlockCropBatches", fields: [farmId, fieldBlockId], references: [farmId, fieldBlockId], onDelete: Cascade)
   buyerCommitments  BuyerCommitment[]
+  missionLinks      MissionCropBatch[]  @relation("MissionCropBatches")
 
   @@index([farmId, fieldBlockId])
   @@index([fieldBlockId])
@@ -134,9 +327,11 @@ model BuyerCommitment {
   updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   farm              Farm      @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
   cropBatch         CropBatch @relation(fields: [farmId, cropBatchId], references: [farmId, cropBatchId], onDelete: Cascade)
+  missions          Mission[] @relation("MissionBuyerCommitment")
 
   @@index([farmId, deadline])
   @@index([cropBatchId, deadline])
+  @@unique([farmId, buyerCommitmentId])
   @@map("buyer_commitments")
   @@schema("public")
 }

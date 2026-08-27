@@ -1,0 +1,11 @@
+{
+  "$schema": "https://langgra.ph/schema.json",
+  "dependencies": ["."],
+  "graphs": {
+    "mission-interpreter": "./src/agent/missions/mission-agent.ts:missionInterpretationGraph",
+    "mission-planner": "./src/agent/missions/mission-agent.ts:missionPlanningGraph",
+    "mission-closeout": "./src/agent/missions/mission-agent.ts:missionCloseoutGraph"
+  },
+  "node_version": "24",
+  "env": ".env"
+}
