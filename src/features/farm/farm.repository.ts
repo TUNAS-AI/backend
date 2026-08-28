@@ -11,6 +11,12 @@ function data(input: FarmInput) { return {
 }; }
 export class FarmRepository {
   async findByOwner(ownerId: string) { const farm = await getPrisma().farm.findUnique({ where: { ownerId } }); return farm ? record(farm) : null; }
+  async snapshot(ownerId: string) {
+    const farm = await getPrisma().farm.findUnique({ where: { ownerId }, include: { fieldBlocks: { orderBy: { createdAt: "asc" } }, cropBatches: { orderBy: { createdAt: "asc" } } } });
+    if (!farm) return null;
+    const { fieldBlocks, cropBatches, ...farmRecord } = farm;
+    return { farm: record(farmRecord), fieldBlocks, cropBatches };
+  }
   async create(ownerId: string, input: FarmInput) { return record(await getPrisma().farm.create({ data: { ownerId, ...data(input), name: input.name as string, defaultWorkerCount: input.defaultWorkerCount as number } })); }
   async update(farmId: string, input: FarmInput) { return record(await getPrisma().farm.update({ where: { farmId }, data: data(input) })); }
   async delete(farmId: string) { await getPrisma().farm.delete({ where: { farmId } }); }

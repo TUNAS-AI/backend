@@ -3,17 +3,17 @@ import { z } from "zod";
 import { createAgentModel, getAgentModelConfig, invokeStructuredAgent, type StructuredModel } from "../runtime";
 import type { CloseoutSummary, GeneratedPlan, MissionFact, MissionFactKey, MissionFactReview, MissionInterpretation } from "../../features/missions/mission.types";
 
-const factKeys = ["fieldBlockId", "cropBatchIds", "buyerCommitmentId", "maturity", "buyerQuantityKg", "marketQuality", "plannedHarvestKg", "plannedDriedKg", "deadline", "availableWorkerCount", "coveredDryingCapacityKg", "notes"] as const;
+const factKeys = ["fieldBlockId", "cropBatchIds", "buyerCommitmentId", "buyerQuantityKg", "marketQuality", "plannedHarvestKg", "plannedDriedKg", "deadline", "availableWorkerCount", "coveredDryingCapacityKg", "notes"] as const;
 const requiredFactKeys = new Set<MissionFactKey>(factKeys.filter((key) => !["buyerCommitmentId", "availableWorkerCount", "coveredDryingCapacityKg", "notes"].includes(key)));
 const interpretationSchema = z.object({
   fieldBlockId: z.string().uuid().nullable(), cropBatchIds: z.array(z.string().uuid()).max(12), buyerCommitmentId: z.string().uuid().nullable(),
-  maturity: z.string().min(1).nullable(), buyerQuantityKg: z.number().positive().nullable(), marketQuality: z.string().min(1).nullable(), plannedHarvestKg: z.number().positive().nullable(), plannedDriedKg: z.number().positive().nullable(), deadline: z.string().datetime().nullable(), availableWorkerCount: z.number().int().positive().nullable(), coveredDryingCapacityKg: z.number().positive().nullable(), notes: z.string().min(1).nullable(),
+  buyerQuantityKg: z.number().positive().nullable(), marketQuality: z.enum(["Grade A", "Grade B", "Grade C"]).nullable(), plannedHarvestKg: z.number().positive().nullable(), plannedDriedKg: z.number().positive().nullable(), deadline: z.string().datetime().nullable(), availableWorkerCount: z.number().int().positive().nullable(), coveredDryingCapacityKg: z.number().positive().nullable(), notes: z.string().min(1).nullable(),
   clarification: z.object({ key: z.string().min(1), question: z.string().min(1) }).nullable(),
 });
 const interpretationResponseSchema = interpretationSchema.extend({ deadline: z.string().min(1).nullable() });
 const planSchema = z.object({ plans: z.array(z.object({
   name: z.string().min(1), summary: z.string().min(1), recommended: z.boolean(), assumptions: z.array(z.string()), risks: z.record(z.string(), z.string()), dryingEstimateDays: z.number().positive(), dryingEstimateReason: z.string().min(1),
-  activities: z.array(z.object({ title: z.string().min(1), description: z.string().min(1), scheduleType: z.enum(["DAILY_WINDOW", "DATE_RANGE"]), startsOn: z.string().date(), endsOn: z.string().date(), windowStart: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable(), windowEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable(), timezone: z.string().min(1), isConditional: z.boolean(), stage: z.enum(["HARVESTING", "DRYING"]) })).min(1),
+  activities: z.array(z.object({ title: z.string().min(1), description: z.string().min(1), scheduleType: z.enum(["DAILY_WINDOW", "DATE_RANGE"]), startsOn: z.string().date(), endsOn: z.string().date(), windowStart: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable(), windowEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable(), timezone: z.string().min(1), isConditional: z.boolean(), stage: z.enum(["HARVESTING", "DRYING"]), targetHarvestKg: z.number().positive().nullable().optional() })).min(1),
 })).length(3) });
 const closeoutSchema = z.object({ summary: z.string().min(1), lessons: z.array(z.string().min(1)).max(8) });
 
@@ -94,10 +94,10 @@ function createInterpretationGraph(modelFactory: () => StructuredModel, now: () 
 
 Your job is to extract farmer-reported mission facts, resolve unambiguous references to the exact IDs present in the input, and ask one focused clarification when a required fact is missing or ambiguous. Use the input's currentTime to resolve relative deadlines and return an ISO 8601 datetime. Preserve existingFacts unless the farmer explicitly corrects them. A mission may select multiple crop batches only from the selected field block.
 
-Farm defaults and completed-mission history are supporting context, not farmer-reported facts. Do not infer maturity, quantities, market quality, capacity, or any agricultural measurement. Do not invent an ID or a fact. Use null for unknown scalar values and [] for unknown cropBatchIds. clarification must be null unless asking exactly one question, and it must be an object with key and question.
+Farm defaults and completed-mission history are supporting context, not farmer-reported facts. Do not infer quantities, market quality, capacity, or any agricultural measurement. Market quality must be exactly Grade A, Grade B, or Grade C. Do not invent an ID or a fact. Use null for unknown scalar values and [] for unknown cropBatchIds. clarification must be null unless asking exactly one question, and it must be an object with key and question.
 
 Return one JSON object with exactly these keys and no others:
-{"fieldBlockId":string|null,"cropBatchIds":string[],"buyerCommitmentId":string|null,"maturity":string|null,"buyerQuantityKg":number|null,"marketQuality":string|null,"plannedHarvestKg":number|null,"plannedDriedKg":number|null,"deadline":string|null,"availableWorkerCount":number|null,"coveredDryingCapacityKg":number|null,"notes":string|null,"clarification":{"key":string,"question":string}|null}
+{"fieldBlockId":string|null,"cropBatchIds":string[],"buyerCommitmentId":string|null,"buyerQuantityKg":number|null,"marketQuality":"Grade A"|"Grade B"|"Grade C"|null,"plannedHarvestKg":number|null,"plannedDriedKg":number|null,"deadline":string|null,"availableWorkerCount":number|null,"coveredDryingCapacityKg":number|null,"notes":string|null,"clarification":{"key":string,"question":string}|null}
 
 deadline must be an ISO 8601 datetime. Use only the canonical keys above: do not use aliases such as readiness, buyerQuantity, workerAvailability, or coveredDryingCapacity, and do not nest values. Your entire response must be this JSON object: no Markdown, explanation, or additional words.
 
@@ -122,20 +122,47 @@ ${JSON.stringify(input)}` };
     .compile();
 }
 
-export function validateGeneratedPlans(plans: GeneratedPlan[], farmTimezone?: string) {
+export function validateGeneratedPlans(plans: GeneratedPlan[], farmTimezone?: string, plannedHarvestKg?: number | null) {
   if (plans.length !== 3) throw new Error("Generated plans must contain exactly three options");
   if (plans.filter((plan) => plan.recommended).length !== 1) throw new Error("Generated plans must contain exactly one recommendation");
   if (new Set(plans.map((plan) => plan.name.trim().toLocaleLowerCase("en-US"))).size !== 3) throw new Error("Generated plans must have distinct names");
-  for (const plan of plans) for (const activity of plan.activities) {
+  for (const plan of plans) {
+    const harvesting = plan.activities.filter((activity) => activity.stage === "HARVESTING");
+    for (const activity of plan.activities) {
     if (activity.endsOn < activity.startsOn) throw new Error("Each activity must end on or after its start date");
     if (activity.scheduleType === "DAILY_WINDOW" && (activity.startsOn !== activity.endsOn || !activity.windowStart || !activity.windowEnd || activity.windowEnd <= activity.windowStart)) throw new Error("Daily-window activities require one increasing time window");
     if (activity.scheduleType === "DATE_RANGE" && (activity.windowStart || activity.windowEnd)) throw new Error("Date-range activities cannot use daily time windows");
     if (activity.stage === "HARVESTING" && activity.scheduleType !== "DAILY_WINDOW") throw new Error("Harvesting activities require a daily window");
     if (activity.stage === "DRYING" && activity.scheduleType !== "DATE_RANGE") throw new Error("Drying activities require a date range");
+    if (activity.targetHarvestKg !== undefined && activity.stage === "HARVESTING" && !activity.targetHarvestKg) throw new Error("Harvesting activities require a target harvest amount");
+    if (activity.targetHarvestKg !== undefined && activity.stage === "DRYING" && activity.targetHarvestKg !== null) throw new Error("Drying activities cannot have a target harvest amount");
     try { new Intl.DateTimeFormat("en-US", { timeZone: activity.timezone }); } catch { throw new Error("Each activity must use an IANA timezone"); }
     if (farmTimezone && activity.timezone !== farmTimezone) throw new Error("Each activity must use the farm timezone");
+    }
+    if (!harvesting.length || !plan.activities.some((activity) => activity.stage === "DRYING")) throw new Error("Each plan must schedule both harvesting and drying");
+    if (plannedHarvestKg && harvesting.reduce((total, activity) => total + (activity.targetHarvestKg ?? 0), 0) < plannedHarvestKg) throw new Error("Harvest activities must cover the planned harvest target");
   }
   return plans;
+}
+
+export function normalizeGeneratedPlanHarvestTargets(plans: GeneratedPlan[], plannedHarvestKg?: number | null) {
+  if (!plannedHarvestKg) return plans;
+  return plans.map((plan) => {
+    const harvests = plan.activities.filter((activity) => activity.stage === "HARVESTING");
+    const missing = harvests.filter((activity) => activity.targetHarvestKg == null);
+    const remaining = plannedHarvestKg - harvests.reduce((total, activity) => total + (activity.targetHarvestKg ?? 0), 0);
+    if (!missing.length || remaining <= 0) return plan;
+    const share = Math.floor((remaining / missing.length) * 1000) / 1000;
+    let assigned = 0;
+    return {
+      ...plan,
+      activities: plan.activities.map((activity) => {
+        if (activity.stage !== "HARVESTING" || activity.targetHarvestKg != null) return activity;
+        assigned += 1;
+        return { ...activity, targetHarvestKg: assigned === missing.length ? Math.round((remaining - share * (missing.length - 1)) * 1000) / 1000 : share };
+      }),
+    };
+  });
 }
 
 export function summarizeWeather(weather: unknown) {
@@ -152,20 +179,30 @@ export function summarizeWeather(weather: unknown) {
   };
 }
 
+function plannedHarvestTarget(context: unknown) { const value = (context as { candidate?: { facts?: { plannedHarvestKg?: unknown } } }).candidate?.facts?.plannedHarvestKg; return typeof value === "number" ? value : null; }
+
 function createPlanningGraph(modelFactory: () => StructuredModel) {
   return new StateGraph(planningState)
     .addNode("prepare-plan-context", (state) => ({ prompt: `Generate exactly three meaningful, distinct shallot harvest-and-drying plans, with exactly one marked recommended. Optimize meeting the stated harvest target safely, balancing farmer-confirmed readiness, deadline, worker availability, farm working hours, and weather/drying risk. Do not claim biological yield or readiness.
 
+Every plan must schedule the entire planned harvest target across one or more HARVESTING activities, followed by DRYING. Split harvesting into as many dated daily windows as needed; never stop at an initial batch or leave the target partly scheduled. Each HARVESTING activity must include its positive targetHarvestKg and the total must meet or exceed plannedHarvestKg. If the deadline cannot fit all work, continue scheduling after it and state the deadline/buyer risk in the plan summary or risks. Do not limit the number of activities.
+
 Use traditional shallot drying knowledge only as an AI estimate: state estimated drying days and its reason in every plan, label it as an assumption, and explain rain dependency. Forecast rain must directly extend the drying estimate and the DRYING date range. The final drying activity end date is that plan's rain-adjusted deadline and may be later than the original farmer deadline; explain every extension in the plan's assumptions, risks, and dryingEstimateReason.
+
+Completed field closeouts are historical observations, not guarantees. When at least two completed outcomes from the selected field show a material recurring result or closeout-note deviation, use it to improve timing, drying buffer, risk handling, or the recommended trade-off. Add one concise assumption beginning "Historical observation:" that names the two-or-more-outcome evidence. Do not make historical claims from fewer than two outcomes, infer readiness or exact worker productivity, or override farmer-confirmed facts.
 
 Harvesting activities must use one local daily window (same start/end date with HH:MM window); drying activities must use a date range with no clock window. Use the supplied IANA timezone. Your entire response must be the requested JSON: no Markdown, explanation, or additional words.\nMission context: ${JSON.stringify(state.context)}` }))
     .addNode("attach-weather", (state) => ({ prompt: `${state.prompt}\nRelevant normalized Open-Meteo forecast: ${JSON.stringify(summarizeWeather(state.weather))}` }))
+    .addNode("attach-historical-context", (state) => ({ prompt: `${state.prompt}\nCompleted closeouts from the selected field: ${JSON.stringify((state.context as { completedMissionHistory?: unknown }).completedMissionHistory ?? [])}` }))
     .addNode("generate-plans", async (state) => ({ plans: (await invokeStructuredAgent(modelFactory, { agentName: "mission-planner", schema: planSchema, schemaName: "mission_plan", prompt: state.prompt as string, runId: state.runId })).plans }))
-    .addNode("validate-schedules", (state) => ({ plans: validateGeneratedPlans(planSchema.parse({ plans: state.plans }).plans, state.farmTimezone) }))
+    .addNode("normalize-harvest-targets", (state) => ({ plans: normalizeGeneratedPlanHarvestTargets(planSchema.parse({ plans: state.plans }).plans, plannedHarvestTarget(state.context)) }))
+    .addNode("validate-schedules", (state) => ({ plans: validateGeneratedPlans(planSchema.parse({ plans: state.plans }).plans, state.farmTimezone, plannedHarvestTarget(state.context)) }))
     .addEdge(START, "prepare-plan-context")
     .addEdge("prepare-plan-context", "attach-weather")
-    .addEdge("attach-weather", "generate-plans")
-    .addEdge("generate-plans", "validate-schedules")
+    .addEdge("attach-weather", "attach-historical-context")
+    .addEdge("attach-historical-context", "generate-plans")
+    .addEdge("generate-plans", "normalize-harvest-targets")
+    .addEdge("normalize-harvest-targets", "validate-schedules")
     .addEdge("validate-schedules", END)
     .compile();
 }
@@ -197,7 +234,7 @@ export class MissionAgent {
 
   async plan(context: unknown, weather: unknown, farmTimezone?: string, runId?: string): Promise<GeneratedPlan[]> {
     const result = await createPlanningGraph(this.modelFactory).invoke({ context, weather, farmTimezone, runId });
-    return validateGeneratedPlans(planSchema.parse({ plans: result.plans }).plans, farmTimezone);
+    return validateGeneratedPlans(planSchema.parse({ plans: result.plans }).plans, farmTimezone, plannedHarvestTarget(context));
   }
 
   async summarizeCloseout(context: unknown, runId?: string): Promise<CloseoutSummary> {

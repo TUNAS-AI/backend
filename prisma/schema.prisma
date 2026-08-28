@@ -194,6 +194,7 @@ model PlanStep {
   timezone      String   @db.Text
   isConditional Boolean  @default(false) @map("is_conditional")
   stage         String   @default("HARVESTING") @db.Text
+  targetHarvestKg Decimal? @map("target_harvest_kg") @db.Decimal(14, 3)
   calendarSyncStatus    String   @default("NOT_REQUESTED") @map("calendar_sync_status") @db.Text
   googleCalendarEventId String?  @map("google_calendar_event_id") @db.Text
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -219,6 +220,7 @@ model MissionStep {
   timezone               String   @db.Text
   isConditional          Boolean  @default(false) @map("is_conditional")
   stage                  String   @default("HARVESTING") @db.Text
+  targetHarvestKg        Decimal? @map("target_harvest_kg") @db.Decimal(14, 3)
   status                 String   @default("SCHEDULED") @db.Text
   calendarSyncStatus     String   @default("NOT_REQUESTED") @map("calendar_sync_status") @db.Text
   googleCalendarEventId  String?  @map("google_calendar_event_id") @db.Text
@@ -237,8 +239,12 @@ model MissionCloseout {
   plannedDriedKg    Decimal  @map("planned_dried_kg") @db.Decimal(14, 3)
   actualHarvestKg   Decimal  @map("actual_harvest_kg") @db.Decimal(14, 3)
   actualDriedKg     Decimal  @map("actual_dried_kg") @db.Decimal(14, 3)
+  harvestedAreaHectares Decimal? @map("harvested_area_hectares") @db.Decimal(12, 4)
+  buyerTargetMet    Boolean  @map("buyer_target_met")
+  dryingCompleted   Boolean  @map("drying_completed")
+  rejectedKg        Decimal? @map("rejected_kg") @db.Decimal(14, 3)
   notes             String?  @db.Text
-  summary           Json     @map("summary") @db.JsonB
+  summary           Json?    @map("summary") @db.JsonB
   createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   mission           Mission  @relation(fields: [missionId], references: [missionId], onDelete: Cascade)
 

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { planCreateData } from "./mission.repository";
+import { missionConfirmationTransactionOptions, planCreateData } from "./mission.repository";
+
+test("allows confirmation writes enough time to commit on the hosted database", () => {
+  assert.deepEqual(missionConfirmationTransactionOptions, { timeout: 15_000 });
+});
 
 test("keeps each generated activity nested under its own plan", () => {
   const data = planCreateData("mission", "run", {

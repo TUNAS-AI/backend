@@ -14,7 +14,9 @@ test("protects mission planning routes with bearer authentication", async () => 
     assert.ok(address && typeof address === "object");
     const base = `http://127.0.0.1:${address.port}`;
     assert.equal((await fetch(`${base}/api/missions`)).status, 401);
+    assert.equal((await fetch(`${base}/api/missions/calendar?from=2026-07-01&to=2026-07-31`)).status, 401);
     assert.equal((await fetch(`${base}/api/missions/00000000-0000-4000-8000-000000000000`)).status, 401);
+    assert.equal((await fetch(`${base}/api/missions/00000000-0000-4000-8000-000000000000`, { method: "DELETE" })).status, 401);
   } finally {
     server.close();
     await once(server, "close");

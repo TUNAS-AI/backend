@@ -27,6 +27,8 @@ test("active lifecycle schema persists stages, fact provenance, and closeout met
   const schema = readFileSync(resolve("prisma/schema.prisma"), "utf8");
   const sql = readFileSync(resolve("prisma/migrations/20260716110000_add_active_mission_lifecycle/migration.sql"), "utf8");
   assert.match(schema, /stage\s+String\s+@default\("WAITING"\)/);
+  assert.match(schema, /buyerTargetMet\s+Boolean/);
+  assert.match(schema, /dryingCompleted\s+Boolean/);
   assert.match(schema, /model MissionCloseout/);
   assert.match(schema, /plannedHarvestKg/);
   assert.match(schema, /provenance\s+String/);
@@ -49,4 +51,12 @@ test("range-based schedules and drying estimates are persisted", () => {
   assert.match(schema, /startsOn/);
   assert.match(sql, /RENAME COLUMN start_at TO starts_on/i);
   assert.match(sql, /schedule_type_check/i);
+});
+
+test("scheduled harvest allocations are persisted for complete split plans", () => {
+  const schema = readFileSync(resolve("prisma/schema.prisma"), "utf8");
+  const sql = readFileSync(resolve("prisma/migrations/20260716150000_add_harvest_targets_to_schedule_steps/migration.sql"), "utf8");
+  assert.match(schema, /targetHarvestKg/);
+  assert.match(sql, /plan_steps ADD COLUMN target_harvest_kg/i);
+  assert.match(sql, /mission_steps ADD COLUMN target_harvest_kg/i);
 });

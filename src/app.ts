@@ -20,6 +20,12 @@ const app = express();
 app.disable("x-powered-by");
 app.use(cors({ origin: env.corsOrigins }));
 app.use(express.json());
+app.use((request, response, next) => {
+  if (!env.performanceDebug) return next();
+  const startedAt = performance.now();
+  response.on("finish", () => console.info("[request timing]", { method: request.method, path: request.path, status: response.statusCode, durationMs: Math.round(performance.now() - startedAt) }));
+  next();
+});
 
 app.get("/", (_request, response) => {
   response.json({ service: "hijau-ai-backend" });

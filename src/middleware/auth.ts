@@ -13,6 +13,19 @@ declare global {
   }
 }
 
+export function authIdentityFromClaims(claims: unknown) {
+  if (typeof claims !== "object" || claims === null) return null;
+  const value = claims as Record<string, unknown>;
+  if (typeof value.sub !== "string") return null;
+  const metadata = typeof value.user_metadata === "object" && value.user_metadata !== null ? value.user_metadata as Record<string, unknown> : {};
+  const displayName = typeof metadata.full_name === "string"
+    ? metadata.full_name
+    : typeof metadata.name === "string"
+      ? metadata.name
+      : null;
+  return { userId: value.sub, email: typeof value.email === "string" ? value.email : null, displayName };
+}
+
 export async function requireAuth(request: Request, response: Response, next: NextFunction) {
   const [scheme, token] = request.header("authorization")?.split(" ") ?? [];
 
@@ -27,19 +40,14 @@ export async function requireAuth(request: Request, response: Response, next: Ne
     return;
   }
 
-  const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data.user) {
+  const { data, error } = await supabase.auth.getClaims(token);
+  const identity = error ? null : authIdentityFromClaims(data?.claims);
+  if (!identity) {
     response.status(401).json({ error: "Invalid or expired bearer token" });
     return;
   }
 
-  request.userId = data.user.id;
-  const metadata = data.user.user_metadata;
-  const displayName = typeof metadata.full_name === "string"
-    ? metadata.full_name
-    : typeof metadata.name === "string"
-      ? metadata.name
-      : null;
-  request.authIdentity = { email: data.user.email ?? null, displayName };
+  request.userId = identity.userId;
+  request.authIdentity = { email: identity.email, displayName: identity.displayName };
   next();
 }

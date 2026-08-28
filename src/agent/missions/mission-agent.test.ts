@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { env } from "../../config/env";
 import { logAgentRawOutput } from "../runtime";
-import { getMissionModelConfig, missionCloseoutGraph, missionInterpretationGraph, missionPlanningGraph, MissionAgent, normalizeMissionDeadline, summarizeWeather, validateGeneratedPlans } from "./mission-agent";
+import { getMissionModelConfig, missionCloseoutGraph, missionInterpretationGraph, missionPlanningGraph, MissionAgent, normalizeGeneratedPlanHarvestTargets, normalizeMissionDeadline, summarizeWeather, validateGeneratedPlans } from "./mission-agent";
 
 test("accepts a configured Gemini model", () => {
   assert.deepEqual(getMissionModelConfig({ AI_PROVIDER: "gemini", AI_API_KEY: "key", AI_MODEL: "gemini-3.1-flash-lite" }), {
@@ -23,7 +23,8 @@ test("rejects generated activities with an invalid calendar schedule", () => {
   assert.throws(() => validateGeneratedPlans(threePlans({ ...plan, activities: [{ ...validHarvest, timezone: "not/a-timezone" }] })), /IANA timezone/);
   assert.throws(() => validateGeneratedPlans(threePlans({ ...plan, activities: [{ ...validHarvest, timezone: "UTC" }] }), "Asia/Jakarta"), /farm timezone/);
   assert.throws(() => validateGeneratedPlans(threePlans({ ...plan, activities: [{ ...validHarvest, scheduleType: "DATE_RANGE" as const, windowStart: null, windowEnd: null }] })), /Harvesting activities/);
-  assert.doesNotThrow(() => validateGeneratedPlans(threePlans({ ...plan, activities: [validHarvest, { title: "Dry", description: "Drying estimate", scheduleType: "DATE_RANGE", startsOn: "2026-07-15", endsOn: "2026-07-19", windowStart: null, windowEnd: null, timezone: "Asia/Jakarta", isConditional: true, stage: "DRYING" }] }), "Asia/Jakarta"));
+  assert.doesNotThrow(() => validateGeneratedPlans(threePlans({ ...plan, activities: [{ ...validHarvest, targetHarvestKg: 20 }, { title: "Dry", description: "Drying estimate", scheduleType: "DATE_RANGE", startsOn: "2026-07-15", endsOn: "2026-07-19", windowStart: null, windowEnd: null, timezone: "Asia/Jakarta", isConditional: true, stage: "DRYING", targetHarvestKg: null }] }), "Asia/Jakarta", 20));
+  assert.throws(() => validateGeneratedPlans(threePlans({ ...plan, activities: [{ ...validHarvest, targetHarvestKg: 10 }, { title: "Dry", description: "Drying estimate", scheduleType: "DATE_RANGE", startsOn: "2026-07-15", endsOn: "2026-07-19", windowStart: null, windowEnd: null, timezone: "Asia/Jakarta", isConditional: true, stage: "DRYING", targetHarvestKg: null }] }), "Asia/Jakarta", 20), /cover the planned harvest target/);
 });
 
 test("requires exactly three uniquely named plans and one recommendation", () => {
@@ -33,20 +34,36 @@ test("requires exactly three uniquely named plans and one recommendation", () =>
   assert.throws(() => validateGeneratedPlans([plan, { ...plan, recommended: false }, { ...plan, name: "After rain", recommended: false }]), /distinct names/);
 });
 
+test("fills legacy missing harvest allocations without replacing supplied amounts", () => {
+  const activities = [
+    { title: "Harvest one", description: "Pick", scheduleType: "DAILY_WINDOW" as const, startsOn: "2026-07-15", endsOn: "2026-07-15", windowStart: "08:00", windowEnd: "10:00", timezone: "Asia/Jakarta", isConditional: false, stage: "HARVESTING" as const },
+    { title: "Harvest two", description: "Pick", scheduleType: "DAILY_WINDOW" as const, startsOn: "2026-07-16", endsOn: "2026-07-16", windowStart: "08:00", windowEnd: "10:00", timezone: "Asia/Jakarta", isConditional: false, stage: "HARVESTING" as const, targetHarvestKg: 20 },
+    { title: "Harvest three", description: "Pick", scheduleType: "DAILY_WINDOW" as const, startsOn: "2026-07-17", endsOn: "2026-07-17", windowStart: "08:00", windowEnd: "10:00", timezone: "Asia/Jakarta", isConditional: false, stage: "HARVESTING" as const },
+    { title: "Dry", description: "Dry", scheduleType: "DATE_RANGE" as const, startsOn: "2026-07-17", endsOn: "2026-07-21", windowStart: null, windowEnd: null, timezone: "Asia/Jakarta", isConditional: false, stage: "DRYING" as const },
+  ];
+  const plans = normalizeGeneratedPlanHarvestTargets([{ name: "Recommended", summary: "Harvest", recommended: true, assumptions: [], risks: {}, dryingEstimateDays: 4, dryingEstimateReason: "Dry", activities }, { name: "Alternative one", summary: "Harvest", recommended: false, assumptions: [], risks: {}, dryingEstimateDays: 4, dryingEstimateReason: "Dry", activities }, { name: "Alternative two", summary: "Harvest", recommended: false, assumptions: [], risks: {}, dryingEstimateDays: 4, dryingEstimateReason: "Dry", activities }], 50);
+  assert.deepEqual(plans[0].activities.filter((activity) => activity.stage === "HARVESTING").map((activity) => activity.targetHarvestKg), [15, 20, 15]);
+  assert.doesNotThrow(() => validateGeneratedPlans(plans, "Asia/Jakarta", 50));
+});
+
 test("instructs the planner to return three options and extend drying for rain", async () => {
-  const plan = { name: "Early harvest", summary: "Harvest", recommended: true, assumptions: ["Rain adds a day"], risks: { rain: "Drying is delayed" }, dryingEstimateDays: 5, dryingEstimateReason: "Rain adds drying time.", activities: [{ title: "Harvest", description: "Pick", scheduleType: "DAILY_WINDOW" as const, startsOn: "2026-07-15", endsOn: "2026-07-15", windowStart: "08:00", windowEnd: "10:00", timezone: "Asia/Jakarta", isConditional: false, stage: "HARVESTING" as const }, { title: "Dry", description: "Dry", scheduleType: "DATE_RANGE" as const, startsOn: "2026-07-15", endsOn: "2026-07-20", windowStart: null, windowEnd: null, timezone: "Asia/Jakarta", isConditional: true, stage: "DRYING" as const }] };
+  const plan = { name: "Early harvest", summary: "Harvest", recommended: true, assumptions: ["Rain adds a day"], risks: { rain: "Drying is delayed" }, dryingEstimateDays: 5, dryingEstimateReason: "Rain adds drying time.", activities: [{ title: "Harvest", description: "Pick", scheduleType: "DAILY_WINDOW" as const, startsOn: "2026-07-15", endsOn: "2026-07-15", windowStart: "08:00", windowEnd: "10:00", timezone: "Asia/Jakarta", isConditional: false, stage: "HARVESTING" as const, targetHarvestKg: 50 }, { title: "Dry", description: "Dry", scheduleType: "DATE_RANGE" as const, startsOn: "2026-07-15", endsOn: "2026-07-20", windowStart: null, windowEnd: null, timezone: "Asia/Jakarta", isConditional: true, stage: "DRYING" as const, targetHarvestKg: null }] };
   let prompt = "";
   const agent = new MissionAgent(() => ({ withStructuredOutput: () => ({ invoke: async (value: Array<{ content: unknown }>) => { prompt = value.map((message) => String(message.content)).join("\n"); return { plans: [plan, { ...plan, name: "Before rain", recommended: false }, { ...plan, name: "After rain", recommended: false }] }; } }) }) as never);
-  await agent.plan({ candidate: { facts: { deadline: "2026-07-18T16:59:59.999Z" } } }, { timezone: "Asia/Jakarta", hourly: { time: ["2026-07-15T00:00"], precipitation_probability: [90], precipitation: [8], wind_speed_10m: [5] } }, "Asia/Jakarta");
+  await agent.plan({ candidate: { facts: { deadline: "2026-07-18T16:59:59.999Z", plannedHarvestKg: 50 } } }, { timezone: "Asia/Jakarta", hourly: { time: ["2026-07-15T00:00"], precipitation_probability: [90], precipitation: [8], wind_speed: [5] } }, "Asia/Jakarta");
   assert.match(prompt, /exactly three meaningful, distinct/);
   assert.match(prompt, /exactly one marked recommended/);
   assert.match(prompt, /Forecast rain must directly extend the drying estimate and the DRYING date range/);
   assert.match(prompt, /rain-adjusted deadline/);
+  assert.match(prompt, /never stop at an initial batch/);
+  assert.match(prompt, /Completed field closeouts are historical observations/);
+  assert.match(prompt, /at least two completed outcomes/);
+  assert.match(prompt, /Completed closeouts from the selected field/);
   assert.match(prompt, /Hijau AI backend agent/);
 });
 
 test("logs the raw planner response through the shared runtime when debugging is enabled", async () => {
-  const plan = { name: "Early harvest", summary: "Harvest", recommended: true, assumptions: [], risks: {}, dryingEstimateDays: 4, dryingEstimateReason: "Dry", activities: [{ title: "Harvest", description: "Pick", scheduleType: "DAILY_WINDOW" as const, startsOn: "2026-07-15", endsOn: "2026-07-15", windowStart: "08:00", windowEnd: "10:00", timezone: "Asia/Jakarta", isConditional: false, stage: "HARVESTING" as const }] };
+  const plan = { name: "Early harvest", summary: "Harvest", recommended: true, assumptions: [], risks: {}, dryingEstimateDays: 4, dryingEstimateReason: "Dry", activities: [{ title: "Harvest", description: "Pick", scheduleType: "DAILY_WINDOW" as const, startsOn: "2026-07-15", endsOn: "2026-07-15", windowStart: "08:00", windowEnd: "10:00", timezone: "Asia/Jakarta", isConditional: false, stage: "HARVESTING" as const, targetHarvestKg: 50 }, { title: "Dry", description: "Dry", scheduleType: "DATE_RANGE" as const, startsOn: "2026-07-15", endsOn: "2026-07-19", windowStart: null, windowEnd: null, timezone: "Asia/Jakarta", isConditional: false, stage: "DRYING" as const, targetHarvestKg: null }] };
   const previousDebug = env.agentDebugRawOutput; const previousInfo = console.info; const previousDir = console.dir; const calls: unknown[][] = [];
   env.agentDebugRawOutput = true;
   console.info = (...args: unknown[]) => { calls.push(args); };
@@ -76,7 +93,7 @@ test("normalizes common relative mission deadlines against the farm timezone", (
 });
 
 test("runs caller-scoped interpretation through the bounded workflow", async () => {
-  const response = { fieldBlockId: null, cropBatchIds: [], buyerCommitmentId: null, maturity: null, buyerQuantityKg: null, marketQuality: null, plannedHarvestKg: null, plannedDriedKg: null, deadline: null, availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: { key: "field", question: "Which field?" } };
+  const response = { fieldBlockId: null, cropBatchIds: [], buyerCommitmentId: null, buyerQuantityKg: null, marketQuality: null, plannedHarvestKg: null, plannedDriedKg: null, deadline: null, availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: { key: "field", question: "Which field?" } };
   const agent = new MissionAgent(() => ({ withStructuredOutput: () => ({ invoke: async () => response }) }) as never);
   const result = await agent.interpret("Help me harvest", { fields: [] });
   assert.equal(result.facts.clarification?.key, "field");
@@ -86,7 +103,7 @@ test("runs caller-scoped interpretation through the bounded workflow", async () 
 });
 
 test("gives interpretation a structured mission input and requires JSON only", async () => {
-  const response = { fieldBlockId: null, cropBatchIds: [], buyerCommitmentId: null, maturity: null, buyerQuantityKg: null, marketQuality: null, plannedHarvestKg: null, plannedDriedKg: null, deadline: null, availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: { key: "fieldBlockId", question: "Which field should be harvested?" } };
+  const response = { fieldBlockId: null, cropBatchIds: [], buyerCommitmentId: null, buyerQuantityKg: null, marketQuality: null, plannedHarvestKg: null, plannedDriedKg: null, deadline: null, availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: { key: "fieldBlockId", question: "Which field should be harvested?" } };
   let prompt = "";
   const agent = new MissionAgent(() => ({ withStructuredOutput: () => ({ invoke: async (value: Array<{ content: unknown }>) => { prompt = value.map((message) => String(message.content)).join("\n"); return response; } }) }) as never, () => new Date("2026-07-16T03:00:00.000Z"));
   await agent.interpret("Harvest the north field", { farmer: { displayName: "Ayu" }, farm: { timezone: "Asia/Jakarta" }, fields: [{ fieldBlockId: "field-1", name: "North" }], cropBatches: [{ cropBatchId: "batch-1", fieldBlockId: "field-1" }], buyerCommitments: [], completedMissionHistory: [], conversation: [{ role: "farmer", content: "Harvest the north field" }], existingFacts: null });
@@ -118,7 +135,7 @@ test("prints raw output with the agent name and run ID only when debugging is en
 });
 
 test("marks complete required facts ready for planning", async () => {
-  const response = { fieldBlockId: "00000000-0000-4000-8000-000000000001", cropBatchIds: ["00000000-0000-4000-8000-000000000002"], buyerCommitmentId: null, maturity: "ready", buyerQuantityKg: 40, marketQuality: "A", plannedHarvestKg: 50, plannedDriedKg: 35, deadline: "2026-07-20T08:00:00.000Z", availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: null };
+  const response = { fieldBlockId: "00000000-0000-4000-8000-000000000001", cropBatchIds: ["00000000-0000-4000-8000-000000000002"], buyerCommitmentId: null, buyerQuantityKg: 40, marketQuality: "Grade A", plannedHarvestKg: 50, plannedDriedKg: 35, deadline: "2026-07-20T08:00:00.000Z", availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: null };
   const agent = new MissionAgent(() => ({ withStructuredOutput: () => ({ invoke: async () => response }) }) as never);
   const result = await agent.interpret("Harvest when ready", {});
   assert.ok(result.review.filter((item) => !["notes", "buyerCommitmentId", "availableWorkerCount", "coveredDryingCapacityKg"].includes(item.key)).every((item) => item.status === "confirmed"));

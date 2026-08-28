@@ -7,12 +7,10 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "start:production": "prisma migrate deploy --config prisma.config.ts && node dist/server.js",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test $(find src -name '*.test.ts' -print)",
     "prisma:seed": "tsx prisma/seed.ts",
     "prisma:validate": "prisma validate --config prisma.config.ts",
-    "prisma:migrate:deploy": "prisma migrate deploy --config prisma.config.ts",
     "prisma:generate": "prisma generate",
     "prisma:studio": "prisma studio --config prisma.config.ts"
   },

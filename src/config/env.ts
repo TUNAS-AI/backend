@@ -18,6 +18,7 @@ try {
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? "development",
   agentDebugRawOutput: process.env.AGENT_DEBUG_RAW_OUTPUT?.trim().toLowerCase() === "true" || process.env.MISSION_DEBUG_RAW_OUTPUT?.trim().toLowerCase() === "true",
+  performanceDebug: process.env.PERFORMANCE_DEBUG?.trim().toLowerCase() === "true",
   port,
   frontendUrl,
   corsOrigins: (process.env.CORS_ORIGIN ?? "http://localhost:5173").split(",").map((origin) => origin.trim()).filter(Boolean),
