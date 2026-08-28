@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { signPreview, verifyPreview } from "./mission-preview-token";
 import { canAdvanceMissionStage, completedFieldHistory, interpretationUnavailable, isStepTransitionAllowed, logInterpretationFailure, logPlanningFailure, nextMissionStage, planningUnavailable } from "./mission.service";
-import { parseCloseout, parsePreviewCandidate } from "./mission.validation";
+import { parseCloseout, parsePreviewCandidate, parseReplanConfirmation } from "./mission.validation";
 
 test("rejects a tampered mission preview", () => {
   const previous = process.env.MISSION_PREVIEW_SECRET;
@@ -43,6 +43,11 @@ test("requires ordered step progress before advancing operational stages", () =>
 
 test("accepts the documented farmer closeout outcome", () => {
   assert.deepEqual(parseCloseout({ actualHarvestKg: 80, actualDriedKg: 70, harvestedAreaHectares: 0.5, buyerTargetMet: false, dryingCompleted: true, rejectedKg: null, notes: "Rain delayed the final batch." }), { actualHarvestKg: 80, actualDriedKg: 70, harvestedAreaHectares: 0.5, buyerTargetMet: false, dryingCompleted: true, rejectedKg: null, notes: "Rain delayed the final batch." });
+});
+
+test("allows only executable stages when confirming a replacement plan", () => {
+  assert.deepEqual(parseReplanConfirmation({ previewToken: "token", planId: "00000000-0000-4000-8000-000000000001", stage: "DRYING" }), { previewToken: "token", planId: "00000000-0000-4000-8000-000000000001", stage: "DRYING" });
+  assert.throws(() => parseReplanConfirmation({ previewToken: "token", planId: "00000000-0000-4000-8000-000000000001", stage: "FINISHED" }), /stage is invalid/);
 });
 
 test("uses only the selected field's six latest closeouts as planning history", () => {

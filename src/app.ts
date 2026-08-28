@@ -12,6 +12,7 @@ import missionRouter, { previewRouter } from "./features/missions/mission.routes
 import onboardingRouter from "./features/onboarding/onboarding.routes";
 import sessionRouter from "./features/auth/session.routes";
 import healthRouter from "./features/health/health.routes";
+import tunasRouter from "./features/tunas/tunas.routes";
 
 const swaggerUi = require("swagger-ui-express");
 
@@ -39,6 +40,7 @@ app.use("/api/crop-batches", cropBatchRouter);
 app.use("/api/buyer-commitments", buyerCommitmentRouter);
 app.use("/api/mission-previews", previewRouter);
 app.use("/api/missions", missionRouter);
+app.use("/api/tunas", tunasRouter);
 app.use("/api/onboarding", onboardingRouter);
 app.use("/api", sessionRouter);
 app.get("/api/openapi.json", (_request, response) => {

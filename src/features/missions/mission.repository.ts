@@ -52,6 +52,27 @@ export class MissionRepository {
     return record(await prisma.mission.findUniqueOrThrow({ where: { missionId }, include: details }));
   }
 
+  async replaceConfirmedPlan(input: { missionId: string; farmId: string; expectedPlanId: string | null; stage: "WAITING" | "HARVESTING" | "DRYING"; messages: MessageInput[]; facts: MissionFact; blocks: FactBlock[]; plan: GeneratedPlan; weather: Prisma.InputJsonValue; traceId?: string | null }) {
+    const prisma = getPrisma();
+    await prisma.$transaction(async (tx) => {
+      const changed = await tx.mission.updateMany({ where: { missionId: input.missionId, farmId: input.farmId, status: "ACTIVE", approvedPlanId: input.expectedPlanId }, data: { stage: input.stage } });
+      if (!changed.count) throw new Error("stale-mission");
+      await tx.mission.update({ where: { missionId: input.missionId }, data: {
+        fieldBlockId: input.facts.fieldBlockId, buyerCommitmentId: input.facts.buyerCommitmentId, notes: input.facts.notes,
+        messages: { create: input.messages.map((message) => ({ role: message.role, content: message.content })) },
+        cropBatches: { deleteMany: {}, create: input.facts.cropBatchIds.map((cropBatchId) => ({ cropBatchId })) },
+        constraints: { deleteMany: {}, create: input.blocks.map((block) => ({ key: block.key, value: block.value as Prisma.InputJsonValue, provenance: block.provenance, confidence: block.confidence })) },
+      } });
+      const run = await tx.planningRun.create({ data: { missionId: input.missionId, status: "SUCCEEDED", traceId: input.traceId ?? null, completedAt: new Date() } });
+      const plan = await tx.plan.create({ data: planCreateData(input.missionId, run.planningRunId, input.plan), include: { steps: { orderBy: { sequence: "asc" } } } });
+      await tx.missionStep.deleteMany({ where: { missionId: input.missionId } });
+      await tx.missionStep.createMany({ data: plan.steps.map((step) => ({ missionId: input.missionId, sourcePlanStepId: step.planStepId, sequence: step.sequence, title: step.title, description: step.description, scheduleType: step.scheduleType, startsOn: step.startsOn, endsOn: step.endsOn, windowStart: step.windowStart, windowEnd: step.windowEnd, timezone: step.timezone, isConditional: step.isConditional, stage: step.stage, targetHarvestKg: step.targetHarvestKg })) });
+      await tx.weatherSnapshot.create({ data: { farmId: input.farmId, fieldBlockId: input.facts.fieldBlockId as string, source: "open-meteo", observedAt: new Date(), payload: input.weather } });
+      await tx.mission.update({ where: { missionId: input.missionId }, data: { approvedPlanId: plan.planId } });
+    }, missionConfirmationTransactionOptions).catch((error: unknown) => { if (error instanceof Error && error.message === "stale-mission") throw error; throw error; });
+    return record(await prisma.mission.findUniqueOrThrow({ where: { missionId: input.missionId }, include: details }));
+  }
+
   async advance(farmId: string, missionId: string, expectedStage: string, stage: string, status: string) {
     const result = await getPrisma().mission.updateMany({ where: { farmId, missionId, status: "ACTIVE", stage: expectedStage }, data: { stage, status } });
     return result.count === 1 ? this.find(farmId, missionId) : null;

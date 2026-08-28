@@ -24,6 +24,11 @@ export function parsePreviewInterpret(value: unknown) {
 }
 export function parsePreviewCandidate(value: unknown): MissionCandidate { return parseSchema(candidateSchema, input(value).candidate, "candidate"); }
 export function parseConfirmation(value: unknown) { const body = input(value); return { previewToken: text(body.previewToken, "previewToken"), planId: uuid(body.planId, "planId") }; }
+export function parseReplanConfirmation(value: unknown) {
+  const confirmation = parseConfirmation(value); const stage = text(input(value).stage, "stage");
+  if (!(["WAITING", "HARVESTING", "DRYING"] as const).includes(stage as "WAITING" | "HARVESTING" | "DRYING")) throw new ApiError(400, "stage is invalid");
+  return { ...confirmation, stage: stage as "WAITING" | "HARVESTING" | "DRYING" };
+}
 export function parseCalendarRange(value: unknown) {
   const query = input(value); const from = text(query.from, "from"); const to = text(query.to, "to");
   if (!z.string().date().safeParse(from).success || !z.string().date().safeParse(to).success || from > to) throw new ApiError(400, "Calendar range is invalid");

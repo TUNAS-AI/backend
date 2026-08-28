@@ -51,6 +51,8 @@ model Farm {
   buyerCommitments          BuyerCommitment[]
   weatherSnapshots          WeatherSnapshot[]
   missions                  Mission[]
+  tunasMessages             TunasMessage[]
+  tunasForecastChecks       TunasForecastCheck[]
 
   @@map("farms")
   @@schema("public")
@@ -73,6 +75,7 @@ model Mission {
   buyerCommitment BuyerCommitment?      @relation("MissionBuyerCommitment", fields: [farmId, buyerCommitmentId], references: [farmId, buyerCommitmentId])
   cropBatches     MissionCropBatch[]    @relation("MissionCropBatches")
   messages        MissionMessage[]
+  tunasMessages   TunasMessage[]
   clarifications  MissionClarification[]
   constraints     MissionConstraint[]
   planningRuns    PlanningRun[]
@@ -356,5 +359,37 @@ model WeatherSnapshot {
   @@index([farmId, observedAt])
   @@index([fieldBlockId, observedAt])
   @@map("weather_snapshots")
+  @@schema("public")
+}
+
+model TunasMessage {
+  tunasMessageId String    @id @default(uuid()) @map("tunas_message_id") @db.Uuid
+  farmId         String    @map("farm_id") @db.Uuid
+  missionId      String?   @map("mission_id") @db.Uuid
+  kind           String    @db.Text
+  role           String    @default("assistant") @db.Text
+  content        String    @db.Text
+  actions        Json      @default("[]") @db.JsonB
+  dedupeKey      String?   @map("dedupe_key") @db.Text
+  readAt         DateTime? @map("read_at") @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  farm           Farm      @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
+  mission        Mission?  @relation(fields: [missionId], references: [missionId], onDelete: Cascade)
+
+  @@unique([farmId, dedupeKey])
+  @@index([farmId, createdAt])
+  @@map("tunas_messages")
+  @@schema("public")
+}
+
+model TunasForecastCheck {
+  tunasForecastCheckId String   @id @default(uuid()) @map("tunas_forecast_check_id") @db.Uuid
+  farmId               String   @map("farm_id") @db.Uuid
+  forecastDate         DateTime @map("forecast_date") @db.Date
+  checkedAt            DateTime @default(now()) @map("checked_at") @db.Timestamptz(6)
+  farm                 Farm     @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
+
+  @@unique([farmId, forecastDate])
+  @@map("tunas_forecast_checks")
   @@schema("public")
 }

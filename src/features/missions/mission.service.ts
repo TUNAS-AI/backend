@@ -12,6 +12,8 @@ import type { FactBlock, MessageInput, MissionCandidate, MissionCloseoutInput, M
 const stages: Record<Exclude<MissionStage, "COMPLETED">, Exclude<MissionStage, "WAITING" | "COMPLETED"> | undefined> = { WAITING: "HARVESTING", HARVESTING: "DRYING", DRYING: "FINISHED", FINISHED: "TO_REVIEW", TO_REVIEW: undefined };
 export const nextMissionStage = (stage: string) => stages[stage as keyof typeof stages];
 type StoredStep = { missionStepId: string; sequence: number; stage: "HARVESTING" | "DRYING"; status: MissionStepStatus };
+type ReplanStage = "WAITING" | "HARVESTING" | "DRYING";
+type ReplanPreviewPayload = { exp: number; kind: "replan"; farmId: string; missionId: string; expectedPlanId: string | null; messageCount: number; candidate: MissionCandidate; weather: unknown; plans: import("./mission.types").GeneratedPlan[]; traceId?: string };
 
 export function canAdvanceMissionStage(stage: string, steps: StoredStep[]) {
   if (stage === "WAITING") return true;
@@ -102,6 +104,44 @@ export class MissionService {
     return { missionId };
   }
 
+  private requireActive(mission: MissionRecord) {
+    if (mission.status !== "ACTIVE") throw new ApiError(409, "Only active missions can be replanned");
+    return mission;
+  }
+
+  private factsFromMission(mission: MissionRecord): MissionFact {
+    const constraints = Array.isArray(mission.constraints) ? mission.constraints as Array<{ key: string; value: unknown }> : [];
+    const value = (key: string) => constraints.find((item) => item.key === key)?.value;
+    const cropBatches = Array.isArray(mission.cropBatches) ? mission.cropBatches as Array<{ cropBatchId: string }> : [];
+    const buyerQuantityKg = value("buyerQuantityKg"); const marketQuality = value("marketQuality"); const plannedHarvestKg = value("plannedHarvestKg"); const plannedDriedKg = value("plannedDriedKg"); const deadline = value("deadline"); const availableWorkerCount = value("availableWorkerCount"); const coveredDryingCapacityKg = value("coveredDryingCapacityKg");
+    return {
+      fieldBlockId: typeof mission.fieldBlockId === "string" ? mission.fieldBlockId : null,
+      cropBatchIds: cropBatches.map((item) => item.cropBatchId),
+      buyerCommitmentId: typeof mission.buyerCommitmentId === "string" ? mission.buyerCommitmentId : null,
+      buyerQuantityKg: typeof buyerQuantityKg === "number" ? buyerQuantityKg : null,
+      marketQuality: marketQuality === "Grade A" || marketQuality === "Grade B" || marketQuality === "Grade C" ? marketQuality : null,
+      plannedHarvestKg: typeof plannedHarvestKg === "number" ? plannedHarvestKg : null,
+      plannedDriedKg: typeof plannedDriedKg === "number" ? plannedDriedKg : null,
+      deadline: typeof deadline === "string" ? deadline : null,
+      availableWorkerCount: typeof availableWorkerCount === "number" ? availableWorkerCount : null,
+      coveredDryingCapacityKg: typeof coveredDryingCapacityKg === "number" ? coveredDryingCapacityKg : null,
+      notes: typeof mission.notes === "string" ? mission.notes : null,
+      clarification: null,
+    };
+  }
+
+  async replanDraft(ownerId: string, missionId: string) {
+    const farmId = await this.farmIdForOwner(ownerId); const mission = this.requireActive(await this.get(ownerId, missionId));
+    const facts = this.factsFromMission(mission); const context = await this.repository.context(farmId, facts.fieldBlockId);
+    const messages = (Array.isArray(mission.messages) ? mission.messages : []).map((message) => ({ role: message.role === "assistant" ? "assistant" as const : "farmer" as const, content: String(message.content) }));
+    return { previewId: randomUUID(), messages: messages.length ? messages : [{ role: "farmer" as const, content: String(mission.originalMessage) }], facts, review: review(facts), blocks: blocks(facts), manualOptions: this.manualOptions(context) } satisfies MissionCandidate;
+  }
+
+  async interpretReplan(ownerId: string, missionId: string, input: { previewId?: string; messages: MessageInput[]; message: string; facts?: MissionFact }) {
+    this.requireActive(await this.get(ownerId, missionId));
+    return this.interpret(ownerId, input);
+  }
+
   private validateFacts(fact: MissionFact, context: Awaited<ReturnType<MissionRepository["context"]>>) {
     if (fact.fieldBlockId && !context.fields.some((field) => field.fieldBlockId === fact.fieldBlockId)) throw new ApiError(409, "Mission interpretation selected a field block outside this farm");
     if (new Set(fact.cropBatchIds).size !== fact.cropBatchIds.length) throw new ApiError(409, "Mission interpretation repeated a crop batch");
@@ -172,6 +212,22 @@ export class MissionService {
     return { missionId, plans, previewToken: token, expiresInSeconds: 1800 };
   }
 
+  async replanPreview(ownerId: string, missionId: string, candidate: MissionCandidate) {
+    const farmId = await this.farmIdForOwner(ownerId); const mission = this.requireActive(await this.get(ownerId, missionId));
+    const context = await this.repository.context(farmId, candidate.facts.fieldBlockId); candidate = this.canonicalCandidate(candidate, context); this.requireComplete(candidate);
+    const field = context.fields.find((item) => item.fieldBlockId === candidate.facts.fieldBlockId);
+    if (!field) throw new ApiError(409, "Selected field must belong to this farm");
+    const traceId = randomUUID(); const weather = await this.weatherForecast(Number(field.latitude), Number(field.longitude), context.farm.timezone);
+    let generatedPlans: import("./mission.types").GeneratedPlan[];
+    try {
+      generatedPlans = await traceAgentOperation("mission-replanning-preview", () => this.agent.plan(planningContext(context, candidate), weather, context.farm.timezone, traceId), { farmId, missionId, previewId: candidate.previewId, thread_id: candidate.previewId }, traceId)();
+    } catch (error) { logPlanningFailure(missionId, error); throw planningUnavailable(error); }
+    const plans = generatedPlans.map((plan) => ({ ...plan, planId: randomUUID() }));
+    const messageCount = Array.isArray(mission.messages) ? mission.messages.length : 0;
+    const token = signPreview({ kind: "replan", farmId, missionId, expectedPlanId: typeof mission.approvedPlanId === "string" ? mission.approvedPlanId : null, messageCount, candidate, weather, plans, traceId });
+    return { missionId, plans, previewToken: token, expiresInSeconds: 1800 };
+  }
+
   async confirm(ownerId: string, previewToken: string, planId: string) {
     const payload = verifyPreview<{ exp: number; farmId: string; missionId: string; candidate: MissionCandidate; weather: unknown; plans: import("./mission.types").GeneratedPlan[]; traceId?: string }>(previewToken);
     const farmId = await this.farmIdForOwner(ownerId); if (payload.farmId !== farmId) throw new ApiError(409, "Mission preview belongs to another farm");
@@ -184,6 +240,22 @@ export class MissionService {
     const original = payload.candidate.messages.find((message) => message.role === "farmer")?.content;
     if (!original) throw new ApiError(409, "Mission preview is missing the original request");
     return this.repository.createConfirmed({ missionId: payload.missionId, farmId, originalMessage: original, messages: payload.candidate.messages, facts: payload.candidate.facts, blocks: payload.candidate.blocks, plan, weather: payload.weather as Prisma.InputJsonValue, traceId: payload.traceId });
+  }
+
+  async confirmReplan(ownerId: string, missionId: string, input: { previewToken: string; planId: string; stage: ReplanStage }) {
+    const payload = verifyPreview<ReplanPreviewPayload>(input.previewToken);
+    const farmId = await this.farmIdForOwner(ownerId);
+    if (payload.kind !== "replan" || payload.farmId !== farmId || payload.missionId !== missionId) throw new ApiError(409, "Mission preview belongs to another mission");
+    this.requireComplete(payload.candidate);
+    const context = await this.repository.context(farmId, payload.candidate.facts.fieldBlockId); this.validateFacts(payload.candidate.facts, context);
+    const plan = payload.plans.find((item) => item.planId === input.planId);
+    if (!plan) throw new ApiError(409, "Selected plan is not in this preview");
+    try {
+      return await this.repository.replaceConfirmedPlan({ missionId, farmId, expectedPlanId: payload.expectedPlanId, stage: input.stage, messages: payload.candidate.messages.slice(payload.messageCount), facts: payload.candidate.facts, blocks: payload.candidate.blocks, plan, weather: payload.weather as Prisma.InputJsonValue, traceId: payload.traceId });
+    } catch (error) {
+      if (error instanceof Error && error.message === "stale-mission") throw new ApiError(409, "This mission changed while you were reviewing plans. Refresh and try again.");
+      throw error;
+    }
   }
 
   async advance(ownerId: string, missionId: string, stage: string) {

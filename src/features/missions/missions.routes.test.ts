@@ -17,6 +17,10 @@ test("protects mission planning routes with bearer authentication", async () => 
     assert.equal((await fetch(`${base}/api/missions/calendar?from=2026-07-01&to=2026-07-31`)).status, 401);
     assert.equal((await fetch(`${base}/api/missions/00000000-0000-4000-8000-000000000000`)).status, 401);
     assert.equal((await fetch(`${base}/api/missions/00000000-0000-4000-8000-000000000000`, { method: "DELETE" })).status, 401);
+    assert.equal((await fetch(`${base}/api/missions/00000000-0000-4000-8000-000000000000/replan`)).status, 401);
+    assert.equal((await fetch(`${base}/api/missions/00000000-0000-4000-8000-000000000000/replan/plan`, { method: "POST" })).status, 401);
+    assert.equal((await fetch(`${base}/api/tunas/messages`)).status, 401);
+    assert.equal((await fetch(`${base}/api/tunas/daily-check`, { method: "POST" })).status, 401);
   } finally {
     server.close();
     await once(server, "close");
