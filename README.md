@@ -120,6 +120,17 @@ and required mission configuration without calling the model or weather provider
 
 ## Deployment
 
-Pushes to `main` run CI and deploy the Docker Compose service on the VPS. The
-production container applies pending Prisma migrations before starting the HTTP
-server, so `DATABASE_URL` must be present in the VPS `.env` file.
+The production stack runs the API behind Nginx. The API remains private inside
+the Docker network on port `3000`; Nginx is exposed on VPS port `8086`.
+
+```bash
+cp .env.example .env
+# Fill in the production values, especially DATABASE_URL, CORS_ORIGIN, and FRONTEND_URL.
+docker compose up -d --build
+```
+
+Confirm the deployment with `curl http://127.0.0.1:8086/health`. The production
+container applies pending Prisma migrations before starting the HTTP server, so
+`DATABASE_URL` must be present in the VPS `.env` file. For HTTPS, place this
+service behind your VPS's TLS-enabled reverse proxy and forward requests to
+`http://127.0.0.1:8086`.
