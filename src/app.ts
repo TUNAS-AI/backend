@@ -4,7 +4,6 @@ import { env } from "./config/env";
 import { openApiDocument } from "./config/openapi";
 import authRouter from "./features/auth/auth.routes";
 import { swaggerTokenHandoffScript } from "./features/auth/swagger-token-handoff.script";
-import buyerCommitmentRouter from "./features/buyer-commitments/buyer-commitment.routes";
 import cropBatchRouter from "./features/crop-batches/crop-batch.routes";
 import farmRouter from "./features/farm/farm.routes";
 import fieldBlockRouter from "./features/field-blocks/field-block.routes";
@@ -13,6 +12,7 @@ import onboardingRouter from "./features/onboarding/onboarding.routes";
 import sessionRouter from "./features/auth/session.routes";
 import healthRouter from "./features/health/health.routes";
 import tunasRouter from "./features/tunas/tunas.routes";
+import googleCalendarRouter from "./features/google-calendar/google-calendar.routes";
 
 const swaggerUi = require("swagger-ui-express");
 
@@ -37,11 +37,11 @@ app.use("/api/auth", authRouter);
 app.use("/api/farm", farmRouter);
 app.use("/api/field-blocks", fieldBlockRouter);
 app.use("/api/crop-batches", cropBatchRouter);
-app.use("/api/buyer-commitments", buyerCommitmentRouter);
 app.use("/api/mission-previews", previewRouter);
 app.use("/api/missions", missionRouter);
 app.use("/api/tunas", tunasRouter);
 app.use("/api/onboarding", onboardingRouter);
+app.use("/api/google-calendar", googleCalendarRouter);
 app.use("/api", sessionRouter);
 app.get("/api/openapi.json", (_request, response) => {
   response.json(openApiDocument);

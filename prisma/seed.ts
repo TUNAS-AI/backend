@@ -17,18 +17,15 @@ async function seed() {
   });
   const batch = await prisma.cropBatch.findFirst({ where: { farmId: farm.farmId, fieldBlockId: field.fieldBlockId, variety: "Bima Brebes" } })
     ?? await prisma.cropBatch.create({ data: { farmId: farm.farmId, fieldBlockId: field.fieldBlockId, crop: "shallot", variety: "Bima Brebes", plantingDate: date(-58), notes: "Siap dipanen dalam minggu ini." } });
-  const buyer = await prisma.buyerCommitment.findFirst({ where: { farmId: farm.farmId, cropBatchId: batch.cropBatchId, buyerName: "Pasar Giwangan" } })
-    ?? await prisma.buyerCommitment.create({ data: { farmId: farm.farmId, cropBatchId: batch.cropBatchId, buyerName: "Pasar Giwangan", quantityKg: 450, targetGrade: "Super", deadline: date(5), notes: "Prioritaskan umbi kering dan bersih." } });
-
   const previousMission = await prisma.mission.findFirst({ where: { farmId: farm.farmId, originalMessage: seedMessage } });
   if (previousMission) await prisma.mission.delete({ where: { missionId: previousMission.missionId } });
 
   const mission = await prisma.$transaction(async (tx) => {
     const createdMission = await tx.mission.create({
       data: {
-        farmId: farm.farmId, fieldBlockId: field.fieldBlockId, buyerCommitmentId: buyer.buyerCommitmentId, originalMessage: seedMessage,
-        notes: "Gunakan data ini untuk membangun dan memeriksa halaman mission.",
-        messages: { create: [{ role: "farmer", content: "Bawang merah di Lahan Demo Utara siap panen. Saya perlu memenuhi pesanan 450 kg minggu ini." }, { role: "assistant", content: "Rencana panen dan pengeringan sudah disiapkan berdasarkan pesanan pasar dan kondisi lapangan." }] },
+        farmId: farm.farmId, fieldBlockId: field.fieldBlockId, originalMessage: seedMessage,
+        notes: "Gunakan data ini untuk membangun dan memeriksa halaman mission. Catatan pembeli: utamakan umbi kering dan bersih.",
+        messages: { create: [{ role: "farmer", content: "Bawang merah di Lahan Demo Utara siap panen. Saya menargetkan 450 kg minggu ini." }, { role: "assistant", content: "Rencana panen dan pengeringan sudah disiapkan berdasarkan kondisi lapangan." }] },
         constraints: { create: [{ key: "plannedHarvestKg", value: 600, provenance: "FARMER_REPORTED", confidence: "high" }, { key: "plannedDriedKg", value: 450, provenance: "FARMER_REPORTED", confidence: "high" }, { key: "deadline", value: date(5).toISOString(), provenance: "FARMER_REPORTED", confidence: "high" }] },
         cropBatches: { create: { cropBatch: { connect: { farmId_cropBatchId: { farmId: farm.farmId, cropBatchId: batch.cropBatchId } } } } },
       },

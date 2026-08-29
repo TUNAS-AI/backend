@@ -5,10 +5,9 @@ import type { MessageInput, MissionCandidate, MissionCloseoutInput, MissionStepS
 
 const messageSchema = z.object({ role: z.enum(["farmer", "assistant"]), content: z.string().trim().min(1).max(4000) });
 const factsSchema = z.object({
-  fieldBlockId: z.string().uuid().nullable(), cropBatchIds: z.array(z.string().uuid()).max(12), buyerCommitmentId: z.string().uuid().nullable(),
-  buyerQuantityKg: z.number().positive().nullable(), marketQuality: z.enum(["Grade A", "Grade B", "Grade C"]).nullable(), plannedHarvestKg: z.number().positive().nullable(), plannedDriedKg: z.number().positive().nullable(), deadline: z.union([z.string().datetime(), z.string().date()]).nullable(), availableWorkerCount: z.number().int().positive().nullable(), coveredDryingCapacityKg: z.number().positive().nullable(), notes: z.string().min(1).nullable(), clarification: z.object({ key: z.string().min(1), question: z.string().min(1) }).nullable(),
+  fieldBlockId: z.string().uuid().nullable(), cropBatchIds: z.array(z.string().uuid()).max(12), marketQuality: z.enum(["Grade A", "Grade B", "Grade C"]).nullable(), plannedHarvestKg: z.number().positive().nullable(), plannedDriedKg: z.number().positive().nullable(), deadline: z.union([z.string().datetime(), z.string().date()]).nullable(), availableWorkerCount: z.number().int().positive().nullable(), coveredDryingCapacityKg: z.number().positive().nullable(), notes: z.string().min(1).nullable(), clarification: z.object({ key: z.string().min(1), question: z.string().min(1) }).nullable(),
 });
-const reviewSchema = z.object({ key: z.enum(["fieldBlockId", "cropBatchIds", "buyerCommitmentId", "buyerQuantityKg", "marketQuality", "plannedHarvestKg", "plannedDriedKg", "deadline", "availableWorkerCount", "coveredDryingCapacityKg", "notes"]), status: z.enum(["confirmed", "needs_clarification", "missing"]), reason: z.string().min(1), provenance: z.enum(["FARMER_REPORTED", "INFERRED"]), confidence: z.enum(["high", "medium", "low"]) });
+const reviewSchema = z.object({ key: z.enum(["fieldBlockId", "cropBatchIds", "marketQuality", "plannedHarvestKg", "plannedDriedKg", "deadline", "availableWorkerCount", "coveredDryingCapacityKg", "notes"]), status: z.enum(["confirmed", "needs_clarification", "missing"]), reason: z.string().min(1), provenance: z.enum(["FARMER_REPORTED", "INFERRED"]), confidence: z.enum(["high", "medium", "low"]) });
 const candidateSchema = z.object({ previewId: z.string().uuid(), messages: z.array(messageSchema).min(1).max(40), facts: factsSchema }).transform((candidate) => ({ ...candidate, review: [], blocks: [] }) as MissionCandidate);
 
 function parseSchema<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
@@ -39,7 +38,7 @@ export function parseStepStatus(value: unknown): MissionStepStatus { const statu
 export function parseCloseout(value: unknown): MissionCloseoutInput {
   const body = input(value);
   const optionalNumber = (field: string) => body[field] === undefined || body[field] === null ? null : number(body[field], field, 0);
-  if (typeof body.buyerTargetMet !== "boolean" || typeof body.dryingCompleted !== "boolean") throw new ApiError(400, "Closeout decisions are invalid");
-  return { actualHarvestKg: number(body.actualHarvestKg, "actualHarvestKg", 0), actualDriedKg: number(body.actualDriedKg, "actualDriedKg", 0), harvestedAreaHectares: optionalNumber("harvestedAreaHectares"), buyerTargetMet: body.buyerTargetMet, dryingCompleted: body.dryingCompleted, rejectedKg: optionalNumber("rejectedKg"), notes: body.notes === undefined || body.notes === null ? null : text(body.notes, "notes") };
+  if (typeof body.dryingCompleted !== "boolean") throw new ApiError(400, "Closeout decisions are invalid");
+  return { actualHarvestKg: number(body.actualHarvestKg, "actualHarvestKg", 0), actualDriedKg: number(body.actualDriedKg, "actualDriedKg", 0), harvestedAreaHectares: optionalNumber("harvestedAreaHectares"), dryingCompleted: body.dryingCompleted, rejectedKg: optionalNumber("rejectedKg"), notes: body.notes === undefined || body.notes === null ? null : text(body.notes, "notes") };
 }
 export function parseMissionId(value: unknown, key: string) { return uuid(value, key); }

@@ -7,6 +7,7 @@ import { MissionAgent, MissionInterpretationOutputError, normalizeMissionDeadlin
 import { getOpenMeteoForecast } from "../../agent/missions/open-meteo.client";
 import { signPreview, verifyPreview } from "./mission-preview-token";
 import { MissionRepository } from "./mission.repository";
+import { GoogleCalendarService } from "../google-calendar/google-calendar.service";
 import type { FactBlock, MessageInput, MissionCandidate, MissionCloseoutInput, MissionFact, MissionRecord, MissionStage, MissionStatus, MissionStepStatus } from "./mission.types";
 
 const stages: Record<Exclude<MissionStage, "COMPLETED">, Exclude<MissionStage, "WAITING" | "COMPLETED"> | undefined> = { WAITING: "HARVESTING", HARVESTING: "DRYING", DRYING: "FINISHED", FINISHED: "TO_REVIEW", TO_REVIEW: undefined };
@@ -44,9 +45,9 @@ export function logInterpretationFailure(previewId: string, error: unknown) {
   const kind = error instanceof MissionInterpretationOutputError || /failed to parse|output_parsing_failure|output failed validation/i.test(message) ? "output_parsing_failure" : "provider_failure";
   console.warn("Mission interpretation failed", { previewId, kind });
 }
-const required = ["fieldBlockId", "cropBatchIds", "buyerQuantityKg", "marketQuality", "plannedHarvestKg", "plannedDriedKg", "deadline"] as const;
-const factKeys = ["fieldBlock", "cropBatch", "buyerQuantityKg", "marketQuality", "deadline", "plannedHarvestKg", "plannedDriedKg"] as const;
-type HistoricalOutcome = { mission: { fieldBlockId: string | null }; plannedHarvestKg: unknown; plannedDriedKg: unknown; actualHarvestKg: unknown; actualDriedKg: unknown; harvestedAreaHectares: unknown; buyerTargetMet: unknown; dryingCompleted: unknown; rejectedKg: unknown; notes: unknown };
+const required = ["fieldBlockId", "cropBatchIds", "marketQuality", "plannedHarvestKg", "plannedDriedKg", "deadline"] as const;
+const factKeys = ["fieldBlock", "cropBatch", "marketQuality", "deadline", "plannedHarvestKg", "plannedDriedKg"] as const;
+type HistoricalOutcome = { mission: { fieldBlockId: string | null }; plannedHarvestKg: unknown; plannedDriedKg: unknown; actualHarvestKg: unknown; actualDriedKg: unknown; harvestedAreaHectares: unknown; dryingCompleted: unknown; rejectedKg: unknown; notes: unknown };
 
 function transcript(messages: MessageInput[]) { return messages.map((message) => `${message.role === "assistant" ? "Assistant" : "Farmer"}: ${message.content}`).join("\n"); }
 function historicalNumber(value: unknown) {
@@ -55,7 +56,7 @@ function historicalNumber(value: unknown) {
   return Number.isFinite(numeric) ? numeric : null;
 }
 export function completedFieldHistory(history: HistoricalOutcome[], fieldBlockId: string) {
-  return history.filter((outcome) => outcome.mission.fieldBlockId === fieldBlockId).slice(0, 6).map((outcome) => ({ plannedHarvestKg: historicalNumber(outcome.plannedHarvestKg), plannedDriedKg: historicalNumber(outcome.plannedDriedKg), actualHarvestKg: historicalNumber(outcome.actualHarvestKg), actualDriedKg: historicalNumber(outcome.actualDriedKg), harvestedAreaHectares: historicalNumber(outcome.harvestedAreaHectares), buyerTargetMet: typeof outcome.buyerTargetMet === "boolean" ? outcome.buyerTargetMet : null, dryingCompleted: typeof outcome.dryingCompleted === "boolean" ? outcome.dryingCompleted : null, rejectedKg: historicalNumber(outcome.rejectedKg), closeoutNotes: typeof outcome.notes === "string" ? outcome.notes : null }));
+  return history.filter((outcome) => outcome.mission.fieldBlockId === fieldBlockId).slice(0, 6).map((outcome) => ({ plannedHarvestKg: historicalNumber(outcome.plannedHarvestKg), plannedDriedKg: historicalNumber(outcome.plannedDriedKg), actualHarvestKg: historicalNumber(outcome.actualHarvestKg), actualDriedKg: historicalNumber(outcome.actualDriedKg), harvestedAreaHectares: historicalNumber(outcome.harvestedAreaHectares), dryingCompleted: typeof outcome.dryingCompleted === "boolean" ? outcome.dryingCompleted : null, rejectedKg: historicalNumber(outcome.rejectedKg), closeoutNotes: typeof outcome.notes === "string" ? outcome.notes : null }));
 }
 function planningContext(context: Awaited<ReturnType<MissionRepository["context"]>>, candidate: MissionCandidate) {
   const { history, ...farmContext } = context;
@@ -67,7 +68,6 @@ function interpretationContext(context: Awaited<ReturnType<MissionRepository["co
     farm: { name: context.farm.name, location: context.farm.location, notes: context.farm.notes, timezone: context.farm.timezone, defaultWorkingHours: context.farm.defaultWorkingHours, defaultWorkerCount: context.farm.defaultWorkerCount },
     fields: context.fields.map((field) => ({ fieldBlockId: field.fieldBlockId, name: field.name, areaHectares: field.areaHectares, latitude: field.latitude, longitude: field.longitude, status: field.status, notes: field.notes })),
     cropBatches: context.cropBatches.map((batch) => ({ cropBatchId: batch.cropBatchId, fieldBlockId: batch.fieldBlockId, crop: batch.crop, variety: batch.variety, plantingDate: batch.plantingDate, status: batch.status, notes: batch.notes })),
-    buyerCommitments: context.buyerCommitments.map((commitment) => ({ buyerCommitmentId: commitment.buyerCommitmentId, cropBatchId: commitment.cropBatchId, buyerName: commitment.buyerName, quantityKg: commitment.quantityKg, targetGrade: commitment.targetGrade, deadline: commitment.deadline, notes: commitment.notes })),
     completedMissionHistory: context.history.map((outcome) => ({ fieldBlockId: outcome.mission.fieldBlockId, originalMessage: outcome.mission.originalMessage, plannedHarvestKg: outcome.plannedHarvestKg, plannedDriedKg: outcome.plannedDriedKg, actualHarvestKg: outcome.actualHarvestKg, actualDriedKg: outcome.actualDriedKg, notes: outcome.notes, summary: outcome.summary })),
     conversation: messages,
     existingFacts: existingFacts ?? null,
@@ -75,14 +75,13 @@ function interpretationContext(context: Awaited<ReturnType<MissionRepository["co
 }
 function confidence(value: unknown): "low" | "high" { return value === null || value === "" || (Array.isArray(value) && !value.length) ? "low" : "high"; }
 function review(facts: MissionFact) {
-  const keys = ["fieldBlockId", "cropBatchIds", "buyerCommitmentId", "buyerQuantityKg", "marketQuality", "plannedHarvestKg", "plannedDriedKg", "deadline", "availableWorkerCount", "coveredDryingCapacityKg", "notes"] as const;
+  const keys = ["fieldBlockId", "cropBatchIds", "marketQuality", "plannedHarvestKg", "plannedDriedKg", "deadline", "availableWorkerCount", "coveredDryingCapacityKg", "notes"] as const;
   return keys.map((key) => ({ key, status: confidence(facts[key]) === "high" ? "confirmed" as const : "missing" as const, reason: confidence(facts[key]) === "high" ? "Ready for planning." : required.includes(key as typeof required[number]) ? "This detail is needed before planning." : "Optional; add it if it affects the work.", provenance: "FARMER_REPORTED" as const, confidence: confidence(facts[key]) }));
 }
 function blocks(facts: MissionFact): FactBlock[] {
   return [
     { key: "fieldBlock", value: facts.fieldBlockId, provenance: "INFERRED", confidence: confidence(facts.fieldBlockId) },
     { key: "cropBatch", value: facts.cropBatchIds, provenance: "INFERRED", confidence: confidence(facts.cropBatchIds) },
-    { key: "buyerQuantityKg", value: facts.buyerQuantityKg, provenance: "FARMER_REPORTED", confidence: confidence(facts.buyerQuantityKg) },
     { key: "marketQuality", value: facts.marketQuality, provenance: "FARMER_REPORTED", confidence: confidence(facts.marketQuality) },
     { key: "deadline", value: facts.deadline, provenance: "FARMER_REPORTED", confidence: confidence(facts.deadline) },
     { key: "plannedHarvestKg", value: facts.plannedHarvestKg, provenance: "FARMER_REPORTED", confidence: confidence(facts.plannedHarvestKg) },
@@ -93,15 +92,17 @@ function blocks(facts: MissionFact): FactBlock[] {
 }
 
 export class MissionService {
-  constructor(private readonly repository = new MissionRepository(), private readonly agent = new MissionAgent(), private readonly farmIdForOwner: (ownerId: string) => Promise<string> = callerFarmId, private readonly weatherForecast = getOpenMeteoForecast) {}
+  constructor(private readonly repository = new MissionRepository(), private readonly agent = new MissionAgent(), private readonly farmIdForOwner: (ownerId: string) => Promise<string> = callerFarmId, private readonly weatherForecast = getOpenMeteoForecast, private readonly calendarSync = new GoogleCalendarService()) {}
 
   async list(ownerId: string) { return this.repository.list(await this.farmIdForOwner(ownerId)); }
   async calendar(ownerId: string, range: { from: Date; to: Date }) { return this.repository.calendar(await this.farmIdForOwner(ownerId), range.from, range.to); }
   async get(ownerId: string, missionId: string) { const mission = await this.repository.find(await this.farmIdForOwner(ownerId), missionId); if (!mission) throw new ApiError(404, "Mission not found"); return mission; }
   async delete(ownerId: string, missionId: string) {
-    const deleted = await this.repository.delete(await this.farmIdForOwner(ownerId), missionId);
+    const farmId = await this.farmIdForOwner(ownerId);
+    const calendarCleanup = await this.calendarSync.removeMissionEvents(farmId, missionId);
+    const deleted = await this.repository.delete(farmId, missionId);
     if (!deleted) throw new ApiError(404, "Mission not found");
-    return { missionId };
+    return { missionId, calendarCleanup };
   }
 
   private requireActive(mission: MissionRecord) {
@@ -113,12 +114,10 @@ export class MissionService {
     const constraints = Array.isArray(mission.constraints) ? mission.constraints as Array<{ key: string; value: unknown }> : [];
     const value = (key: string) => constraints.find((item) => item.key === key)?.value;
     const cropBatches = Array.isArray(mission.cropBatches) ? mission.cropBatches as Array<{ cropBatchId: string }> : [];
-    const buyerQuantityKg = value("buyerQuantityKg"); const marketQuality = value("marketQuality"); const plannedHarvestKg = value("plannedHarvestKg"); const plannedDriedKg = value("plannedDriedKg"); const deadline = value("deadline"); const availableWorkerCount = value("availableWorkerCount"); const coveredDryingCapacityKg = value("coveredDryingCapacityKg");
+    const marketQuality = value("marketQuality"); const plannedHarvestKg = value("plannedHarvestKg"); const plannedDriedKg = value("plannedDriedKg"); const deadline = value("deadline"); const availableWorkerCount = value("availableWorkerCount"); const coveredDryingCapacityKg = value("coveredDryingCapacityKg");
     return {
       fieldBlockId: typeof mission.fieldBlockId === "string" ? mission.fieldBlockId : null,
       cropBatchIds: cropBatches.map((item) => item.cropBatchId),
-      buyerCommitmentId: typeof mission.buyerCommitmentId === "string" ? mission.buyerCommitmentId : null,
-      buyerQuantityKg: typeof buyerQuantityKg === "number" ? buyerQuantityKg : null,
       marketQuality: marketQuality === "Grade A" || marketQuality === "Grade B" || marketQuality === "Grade C" ? marketQuality : null,
       plannedHarvestKg: typeof plannedHarvestKg === "number" ? plannedHarvestKg : null,
       plannedDriedKg: typeof plannedDriedKg === "number" ? plannedDriedKg : null,
@@ -148,9 +147,6 @@ export class MissionService {
     const selected = context.cropBatches.filter((batch) => fact.cropBatchIds.includes(batch.cropBatchId));
     if (selected.length !== fact.cropBatchIds.length) throw new ApiError(409, "Mission interpretation selected a crop batch outside this farm");
     if (selected.length && (!fact.fieldBlockId || selected.some((batch) => batch.fieldBlockId !== fact.fieldBlockId))) throw new ApiError(409, "Selected crop batches must belong to the selected field block");
-    const buyer = fact.buyerCommitmentId ? context.buyerCommitments.find((item) => item.buyerCommitmentId === fact.buyerCommitmentId) : null;
-    if (fact.buyerCommitmentId && !buyer) throw new ApiError(409, "Mission interpretation selected a buyer commitment outside this farm");
-    if (buyer && !fact.cropBatchIds.includes(buyer.cropBatchId)) throw new ApiError(409, "Buyer commitment must belong to a selected crop batch");
   }
 
   private canonicalCandidate(candidate: MissionCandidate, context: Awaited<ReturnType<MissionRepository["context"]>>) {
@@ -186,7 +182,7 @@ export class MissionService {
   }
 
   private requireComplete(candidate: MissionCandidate) {
-    if (candidate.review.some((item) => item.status !== "confirmed" && !["notes", "buyerCommitmentId", "availableWorkerCount", "coveredDryingCapacityKg"].includes(item.key))) throw new ApiError(409, "Review every required mission detail before planning");
+    if (candidate.review.some((item) => item.status !== "confirmed" && !["notes", "availableWorkerCount", "coveredDryingCapacityKg"].includes(item.key))) throw new ApiError(409, "Review every required mission detail before planning");
     for (const key of required) {
       const value = candidate.facts[key];
       if (value === null || value === undefined || (Array.isArray(value) && !value.length)) throw new ApiError(409, `${key} must be clarified before planning`);
@@ -239,7 +235,9 @@ export class MissionService {
     if (!plan) throw new ApiError(409, "Selected plan is not in this preview");
     const original = payload.candidate.messages.find((message) => message.role === "farmer")?.content;
     if (!original) throw new ApiError(409, "Mission preview is missing the original request");
-    return this.repository.createConfirmed({ missionId: payload.missionId, farmId, originalMessage: original, messages: payload.candidate.messages, facts: payload.candidate.facts, blocks: payload.candidate.blocks, plan, weather: payload.weather as Prisma.InputJsonValue, traceId: payload.traceId });
+    const mission = await this.repository.createConfirmed({ missionId: payload.missionId, farmId, originalMessage: original, messages: payload.candidate.messages, facts: payload.candidate.facts, blocks: payload.candidate.blocks, plan, weather: payload.weather as Prisma.InputJsonValue, traceId: payload.traceId });
+    try { await this.calendarSync.syncIfConnected(farmId); } catch { console.warn("Google Calendar sync failed", { missionId: payload.missionId }); }
+    return mission;
   }
 
   async confirmReplan(ownerId: string, missionId: string, input: { previewToken: string; planId: string; stage: ReplanStage }) {
@@ -251,7 +249,9 @@ export class MissionService {
     const plan = payload.plans.find((item) => item.planId === input.planId);
     if (!plan) throw new ApiError(409, "Selected plan is not in this preview");
     try {
-      return await this.repository.replaceConfirmedPlan({ missionId, farmId, expectedPlanId: payload.expectedPlanId, stage: input.stage, messages: payload.candidate.messages.slice(payload.messageCount), facts: payload.candidate.facts, blocks: payload.candidate.blocks, plan, weather: payload.weather as Prisma.InputJsonValue, traceId: payload.traceId });
+      const mission = await this.repository.replaceConfirmedPlan({ missionId, farmId, expectedPlanId: payload.expectedPlanId, stage: input.stage, messages: payload.candidate.messages.slice(payload.messageCount), facts: payload.candidate.facts, blocks: payload.candidate.blocks, plan, weather: payload.weather as Prisma.InputJsonValue, traceId: payload.traceId });
+      try { await this.calendarSync.syncIfConnected(farmId); } catch { console.warn("Google Calendar sync failed", { missionId }); }
+      return mission;
     } catch (error) {
       if (error instanceof Error && error.message === "stale-mission") throw new ApiError(409, "This mission changed while you were reviewing plans. Refresh and try again.");
       throw error;

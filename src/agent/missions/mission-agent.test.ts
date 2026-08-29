@@ -93,7 +93,7 @@ test("normalizes common relative mission deadlines against the farm timezone", (
 });
 
 test("runs caller-scoped interpretation through the bounded workflow", async () => {
-  const response = { fieldBlockId: null, cropBatchIds: [], buyerCommitmentId: null, buyerQuantityKg: null, marketQuality: null, plannedHarvestKg: null, plannedDriedKg: null, deadline: null, availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: { key: "field", question: "Which field?" } };
+  const response = { fieldBlockId: null, cropBatchIds: [], marketQuality: null, plannedHarvestKg: null, plannedDriedKg: null, deadline: null, availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: { key: "field", question: "Which field?" } };
   const agent = new MissionAgent(() => ({ withStructuredOutput: () => ({ invoke: async () => response }) }) as never);
   const result = await agent.interpret("Help me harvest", { fields: [] });
   assert.equal(result.facts.clarification?.key, "field");
@@ -103,10 +103,10 @@ test("runs caller-scoped interpretation through the bounded workflow", async () 
 });
 
 test("gives interpretation a structured mission input and requires JSON only", async () => {
-  const response = { fieldBlockId: null, cropBatchIds: [], buyerCommitmentId: null, buyerQuantityKg: null, marketQuality: null, plannedHarvestKg: null, plannedDriedKg: null, deadline: null, availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: { key: "fieldBlockId", question: "Which field should be harvested?" } };
+  const response = { fieldBlockId: null, cropBatchIds: [], marketQuality: null, plannedHarvestKg: null, plannedDriedKg: null, deadline: null, availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: { key: "fieldBlockId", question: "Which field should be harvested?" } };
   let prompt = "";
   const agent = new MissionAgent(() => ({ withStructuredOutput: () => ({ invoke: async (value: Array<{ content: unknown }>) => { prompt = value.map((message) => String(message.content)).join("\n"); return response; } }) }) as never, () => new Date("2026-07-16T03:00:00.000Z"));
-  await agent.interpret("Harvest the north field", { farmer: { displayName: "Ayu" }, farm: { timezone: "Asia/Jakarta" }, fields: [{ fieldBlockId: "field-1", name: "North" }], cropBatches: [{ cropBatchId: "batch-1", fieldBlockId: "field-1" }], buyerCommitments: [], completedMissionHistory: [], conversation: [{ role: "farmer", content: "Harvest the north field" }], existingFacts: null });
+  await agent.interpret("Harvest the north field", { farmer: { displayName: "Ayu" }, farm: { timezone: "Asia/Jakarta" }, fields: [{ fieldBlockId: "field-1", name: "North" }], cropBatches: [{ cropBatchId: "batch-1", fieldBlockId: "field-1" }], completedMissionHistory: [], conversation: [{ role: "farmer", content: "Harvest the north field" }], existingFacts: null });
   assert.match(prompt, /"farmer":\{"displayName":"Ayu"\}/);
   assert.match(prompt, /"fields":\[\{"fieldBlockId":"field-1"/);
   assert.match(prompt, /"conversation":\[\{"role":"farmer"/);
@@ -135,10 +135,10 @@ test("prints raw output with the agent name and run ID only when debugging is en
 });
 
 test("marks complete required facts ready for planning", async () => {
-  const response = { fieldBlockId: "00000000-0000-4000-8000-000000000001", cropBatchIds: ["00000000-0000-4000-8000-000000000002"], buyerCommitmentId: null, buyerQuantityKg: 40, marketQuality: "Grade A", plannedHarvestKg: 50, plannedDriedKg: 35, deadline: "2026-07-20T08:00:00.000Z", availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: null };
+  const response = { fieldBlockId: "00000000-0000-4000-8000-000000000001", cropBatchIds: ["00000000-0000-4000-8000-000000000002"], marketQuality: "Grade A", plannedHarvestKg: 50, plannedDriedKg: 35, deadline: "2026-07-20T08:00:00.000Z", availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: null };
   const agent = new MissionAgent(() => ({ withStructuredOutput: () => ({ invoke: async () => response }) }) as never);
   const result = await agent.interpret("Harvest when ready", {});
-  assert.ok(result.review.filter((item) => !["notes", "buyerCommitmentId", "availableWorkerCount", "coveredDryingCapacityKg"].includes(item.key)).every((item) => item.status === "confirmed"));
+  assert.ok(result.review.filter((item) => !["notes", "availableWorkerCount", "coveredDryingCapacityKg"].includes(item.key)).every((item) => item.status === "confirmed"));
 });
 
 test("rejects an empty structured planner response", async () => {
@@ -152,7 +152,7 @@ test("rejects invalid structured interpretation output", async () => {
 });
 
 test("rejects OpenCode-style interpretation aliases instead of accepting them as facts", async () => {
-  const response = { readiness: null, buyerQuantity: null, marketQuality: null, plannedHarvestKg: null, plannedDriedKg: null, deadline: null, workerAvailability: { defaultWorkerCount: 4 }, coveredDryingCapacity: null, notes: null, clarification: "Which field block do you want to harvest?" };
+  const response = { readiness: null, marketQuality: null, plannedHarvestKg: null, plannedDriedKg: null, deadline: null, workerAvailability: { defaultWorkerCount: 4 }, coveredDryingCapacity: null, notes: null, clarification: "Which field block do you want to harvest?" };
   const agent = new MissionAgent(() => ({ withStructuredOutput: () => ({ invoke: async () => response }) }) as never);
   await assert.rejects(() => agent.interpret("Help me harvest", { fields: [] }));
 });

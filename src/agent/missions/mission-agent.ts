@@ -3,11 +3,10 @@ import { z } from "zod";
 import { createAgentModel, getAgentModelConfig, invokeStructuredAgent, type StructuredModel } from "../runtime";
 import type { CloseoutSummary, GeneratedPlan, MissionFact, MissionFactKey, MissionFactReview, MissionInterpretation } from "../../features/missions/mission.types";
 
-const factKeys = ["fieldBlockId", "cropBatchIds", "buyerCommitmentId", "buyerQuantityKg", "marketQuality", "plannedHarvestKg", "plannedDriedKg", "deadline", "availableWorkerCount", "coveredDryingCapacityKg", "notes"] as const;
-const requiredFactKeys = new Set<MissionFactKey>(factKeys.filter((key) => !["buyerCommitmentId", "availableWorkerCount", "coveredDryingCapacityKg", "notes"].includes(key)));
+const factKeys = ["fieldBlockId", "cropBatchIds", "marketQuality", "plannedHarvestKg", "plannedDriedKg", "deadline", "availableWorkerCount", "coveredDryingCapacityKg", "notes"] as const;
+const requiredFactKeys = new Set<MissionFactKey>(factKeys.filter((key) => !["availableWorkerCount", "coveredDryingCapacityKg", "notes"].includes(key)));
 const interpretationSchema = z.object({
-  fieldBlockId: z.string().uuid().nullable(), cropBatchIds: z.array(z.string().uuid()).max(12), buyerCommitmentId: z.string().uuid().nullable(),
-  buyerQuantityKg: z.number().positive().nullable(), marketQuality: z.enum(["Grade A", "Grade B", "Grade C"]).nullable(), plannedHarvestKg: z.number().positive().nullable(), plannedDriedKg: z.number().positive().nullable(), deadline: z.string().datetime().nullable(), availableWorkerCount: z.number().int().positive().nullable(), coveredDryingCapacityKg: z.number().positive().nullable(), notes: z.string().min(1).nullable(),
+  fieldBlockId: z.string().uuid().nullable(), cropBatchIds: z.array(z.string().uuid()).max(12), marketQuality: z.enum(["Grade A", "Grade B", "Grade C"]).nullable(), plannedHarvestKg: z.number().positive().nullable(), plannedDriedKg: z.number().positive().nullable(), deadline: z.string().datetime().nullable(), availableWorkerCount: z.number().int().positive().nullable(), coveredDryingCapacityKg: z.number().positive().nullable(), notes: z.string().min(1).nullable(),
   clarification: z.object({ key: z.string().min(1), question: z.string().min(1) }).nullable(),
 });
 const interpretationResponseSchema = interpretationSchema.extend({ deadline: z.string().min(1).nullable() });
@@ -74,11 +73,11 @@ function normalizeInterpretation(value: unknown, timezone: string, now: Date) {
 }
 
 function hasValue(value: unknown) { return value !== null && value !== undefined && value !== "" && (!Array.isArray(value) || value.length > 0); }
-function clarificationKey(key: string) { return ({ field: "fieldBlockId", fieldBlock: "fieldBlockId", cropBatch: "cropBatchIds", buyerQuantity: "buyerQuantityKg", quality: "marketQuality", harvest: "plannedHarvestKg", dried: "plannedDriedKg", workers: "availableWorkerCount", coveredDrying: "coveredDryingCapacityKg" } as Record<string, string>)[key] ?? key; }
+function clarificationKey(key: string) { return ({ field: "fieldBlockId", fieldBlock: "fieldBlockId", cropBatch: "cropBatchIds", quality: "marketQuality", harvest: "plannedHarvestKg", dried: "plannedDriedKg", workers: "availableWorkerCount", coveredDrying: "coveredDryingCapacityKg" } as Record<string, string>)[key] ?? key; }
 function reviewFacts(facts: MissionFact): MissionFactReview[] {
   const openKey = facts.clarification ? clarificationKey(facts.clarification.key) : null;
   return factKeys.map((key) => {
-    const value = facts[key]; const inferred = key === "fieldBlockId" || key === "cropBatchIds" || key === "buyerCommitmentId";
+    const value = facts[key]; const inferred = key === "fieldBlockId" || key === "cropBatchIds";
     if (key === openKey) return { key, status: "needs_clarification", reason: facts.clarification?.question ?? "This detail needs clarification.", provenance: inferred ? "INFERRED" : "FARMER_REPORTED", confidence: "low" };
     if (!hasValue(value)) return { key, status: "missing", reason: requiredFactKeys.has(key) ? "This detail is needed before planning." : "Optional; add it if it affects the work.", provenance: inferred ? "INFERRED" : "FARMER_REPORTED", confidence: "low" };
     return { key, status: "confirmed", reason: "Ready for planning.", provenance: inferred ? "INFERRED" : "FARMER_REPORTED", confidence: "high" };
@@ -97,9 +96,9 @@ Your job is to extract farmer-reported mission facts, resolve unambiguous refere
 Farm defaults and completed-mission history are supporting context, not farmer-reported facts. Do not infer quantities, market quality, capacity, or any agricultural measurement. Market quality must be exactly Grade A, Grade B, or Grade C. Do not invent an ID or a fact. Use null for unknown scalar values and [] for unknown cropBatchIds. clarification must be null unless asking exactly one question, and it must be an object with key and question.
 
 Return one JSON object with exactly these keys and no others:
-{"fieldBlockId":string|null,"cropBatchIds":string[],"buyerCommitmentId":string|null,"buyerQuantityKg":number|null,"marketQuality":"Grade A"|"Grade B"|"Grade C"|null,"plannedHarvestKg":number|null,"plannedDriedKg":number|null,"deadline":string|null,"availableWorkerCount":number|null,"coveredDryingCapacityKg":number|null,"notes":string|null,"clarification":{"key":string,"question":string}|null}
+{"fieldBlockId":string|null,"cropBatchIds":string[],"marketQuality":"Grade A"|"Grade B"|"Grade C"|null,"plannedHarvestKg":number|null,"plannedDriedKg":number|null,"deadline":string|null,"availableWorkerCount":number|null,"coveredDryingCapacityKg":number|null,"notes":string|null,"clarification":{"key":string,"question":string}|null}
 
-deadline must be an ISO 8601 datetime. Use only the canonical keys above: do not use aliases such as readiness, buyerQuantity, workerAvailability, or coveredDryingCapacity, and do not nest values. Your entire response must be this JSON object: no Markdown, explanation, or additional words.
+deadline must be an ISO 8601 datetime. Use only the canonical keys above: do not use aliases such as readiness, workerAvailability, or coveredDryingCapacity, and do not nest values. Your entire response must be this JSON object: no Markdown, explanation, or additional words.
 
 Mission interpreter input:
 ${JSON.stringify(input)}` };

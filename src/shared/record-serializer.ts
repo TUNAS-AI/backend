@@ -1,4 +1,4 @@
-const dateOnlyFields = new Set(["plantingDate"]);
+const dateOnlyFields = new Set(["plantingDate", "startsOn", "endsOn"]);
 
 function serialize(value: unknown, key?: string): unknown {
   if (value instanceof Date) return key && dateOnlyFields.has(key) ? value.toISOString().slice(0, 10) : value.toISOString();

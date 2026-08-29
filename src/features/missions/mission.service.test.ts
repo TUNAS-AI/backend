@@ -42,7 +42,7 @@ test("requires ordered step progress before advancing operational stages", () =>
 });
 
 test("accepts the documented farmer closeout outcome", () => {
-  assert.deepEqual(parseCloseout({ actualHarvestKg: 80, actualDriedKg: 70, harvestedAreaHectares: 0.5, buyerTargetMet: false, dryingCompleted: true, rejectedKg: null, notes: "Rain delayed the final batch." }), { actualHarvestKg: 80, actualDriedKg: 70, harvestedAreaHectares: 0.5, buyerTargetMet: false, dryingCompleted: true, rejectedKg: null, notes: "Rain delayed the final batch." });
+  assert.deepEqual(parseCloseout({ actualHarvestKg: 80, actualDriedKg: 70, harvestedAreaHectares: 0.5, dryingCompleted: true, rejectedKg: null, notes: "Rain delayed the final batch." }), { actualHarvestKg: 80, actualDriedKg: 70, harvestedAreaHectares: 0.5, dryingCompleted: true, rejectedKg: null, notes: "Rain delayed the final batch." });
 });
 
 test("allows only executable stages when confirming a replacement plan", () => {
@@ -51,10 +51,10 @@ test("allows only executable stages when confirming a replacement plan", () => {
 });
 
 test("uses only the selected field's six latest closeouts as planning history", () => {
-  const history = Array.from({ length: 8 }, (_, index) => ({ mission: { fieldBlockId: index === 7 ? "other-field" : "field-1" }, plannedHarvestKg: `${100 + index}`, plannedDriedKg: 80, actualHarvestKg: 90, actualDriedKg: 70, harvestedAreaHectares: null, buyerTargetMet: false, dryingCompleted: true, rejectedKg: 2, notes: `Rain delay ${index}` }));
+  const history = Array.from({ length: 8 }, (_, index) => ({ mission: { fieldBlockId: index === 7 ? "other-field" : "field-1" }, plannedHarvestKg: `${100 + index}`, plannedDriedKg: 80, actualHarvestKg: 90, actualDriedKg: 70, harvestedAreaHectares: null, dryingCompleted: true, rejectedKg: 2, notes: `Rain delay ${index}` }));
   const outcomes = completedFieldHistory(history, "field-1");
   assert.equal(outcomes.length, 6);
-  assert.deepEqual(outcomes[0], { plannedHarvestKg: 100, plannedDriedKg: 80, actualHarvestKg: 90, actualDriedKg: 70, harvestedAreaHectares: null, buyerTargetMet: false, dryingCompleted: true, rejectedKg: 2, closeoutNotes: "Rain delay 0" });
+  assert.deepEqual(outcomes[0], { plannedHarvestKg: 100, plannedDriedKg: 80, actualHarvestKg: 90, actualDriedKg: 70, harvestedAreaHectares: null, dryingCompleted: true, rejectedKg: 2, closeoutNotes: "Rain delay 0" });
 });
 
 test("turns an empty planner response into a retryable API error", () => {
@@ -95,7 +95,7 @@ test("logs only safe metadata for invalid planner output", () => {
 test("discards browser-provided mission review and fact blocks", () => {
   const candidate = parsePreviewCandidate({ candidate: {
     previewId: "00000000-0000-4000-8000-000000000001", messages: [{ role: "farmer", content: "Harvest shallots" }],
-    facts: { fieldBlockId: "00000000-0000-4000-8000-000000000002", cropBatchIds: ["00000000-0000-4000-8000-000000000003"], buyerCommitmentId: null, buyerQuantityKg: 60, marketQuality: "Grade A", plannedHarvestKg: 80, plannedDriedKg: 70, deadline: "2026-07-23", availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: null },
+    facts: { fieldBlockId: "00000000-0000-4000-8000-000000000002", cropBatchIds: ["00000000-0000-4000-8000-000000000003"], marketQuality: "Grade A", plannedHarvestKg: 80, plannedDriedKg: 70, deadline: "2026-07-23", availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: null },
     review: [{ key: "deadline", status: "confirmed", reason: "forged", provenance: "INFERRED", confidence: "high" }], blocks: [{ key: "deadline", value: "forged", provenance: "INFERRED", confidence: "high" }],
   } });
   assert.deepEqual(candidate.review, []);

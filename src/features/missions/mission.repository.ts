@@ -30,18 +30,18 @@ export class MissionRepository {
 
   async context(farmId: string, fieldBlockId?: string | null) {
     const prisma = getPrisma();
-    const [farm, fields, cropBatches, buyerCommitments, outcomes] = await Promise.all([
-      prisma.farm.findUniqueOrThrow({ where: { farmId }, include: { owner: true } }), prisma.fieldBlock.findMany({ where: { farmId } }), prisma.cropBatch.findMany({ where: { farmId } }), prisma.buyerCommitment.findMany({ where: { farmId, status: "active" } }),
+    const [farm, fields, cropBatches, outcomes] = await Promise.all([
+      prisma.farm.findUniqueOrThrow({ where: { farmId }, include: { owner: true } }), prisma.fieldBlock.findMany({ where: { farmId } }), prisma.cropBatch.findMany({ where: { farmId } }),
       prisma.missionCloseout.findMany({ where: { mission: { farmId, status: "COMPLETED" } }, include: { mission: { select: { fieldBlockId: true, originalMessage: true } } }, orderBy: { createdAt: "desc" }, take: 20 }),
     ]);
     const history = outcomes.sort((a, b) => Number(b.mission.fieldBlockId === fieldBlockId) - Number(a.mission.fieldBlockId === fieldBlockId));
-    return { farm, fields, cropBatches, buyerCommitments, history };
+    return { farm, fields, cropBatches, history };
   }
 
   async createConfirmed(input: { missionId: string; farmId: string; originalMessage: string; messages: MessageInput[]; facts: MissionFact; blocks: FactBlock[]; plan: GeneratedPlan; weather: Prisma.InputJsonValue; traceId?: string | null }) {
     const prisma = getPrisma();
     const missionId = await prisma.$transaction(async (tx) => {
-      const mission = await tx.mission.create({ data: { missionId: input.missionId, farmId: input.farmId, fieldBlockId: input.facts.fieldBlockId, buyerCommitmentId: input.facts.buyerCommitmentId, status: "ACTIVE", stage: "WAITING", originalMessage: input.originalMessage, notes: input.facts.notes, messages: { create: input.messages.map((message) => ({ role: message.role, content: message.content })) }, cropBatches: { create: input.facts.cropBatchIds.map((cropBatchId): Prisma.MissionCropBatchUncheckedCreateWithoutMissionInput => ({ cropBatchId })) }, constraints: { create: input.blocks.map((block) => ({ key: block.key, value: block.value as Prisma.InputJsonValue, provenance: block.provenance, confidence: block.confidence })) } } });
+      const mission = await tx.mission.create({ data: { missionId: input.missionId, farmId: input.farmId, fieldBlockId: input.facts.fieldBlockId, status: "ACTIVE", stage: "WAITING", originalMessage: input.originalMessage, notes: input.facts.notes, messages: { create: input.messages.map((message) => ({ role: message.role, content: message.content })) }, cropBatches: { create: input.facts.cropBatchIds.map((cropBatchId): Prisma.MissionCropBatchUncheckedCreateWithoutMissionInput => ({ cropBatchId })) }, constraints: { create: input.blocks.map((block) => ({ key: block.key, value: block.value as Prisma.InputJsonValue, provenance: block.provenance, confidence: block.confidence })) } } });
       const run = await tx.planningRun.create({ data: { missionId: mission.missionId, status: "SUCCEEDED", traceId: input.traceId ?? null, completedAt: new Date() } });
       const plan = await tx.plan.create({ data: planCreateData(mission.missionId, run.planningRunId, input.plan), include: { steps: { orderBy: { sequence: "asc" } } } });
       await tx.missionStep.createMany({ data: plan.steps.map((step) => ({ missionId: mission.missionId, sourcePlanStepId: step.planStepId, sequence: step.sequence, title: step.title, description: step.description, scheduleType: step.scheduleType, startsOn: step.startsOn, endsOn: step.endsOn, windowStart: step.windowStart, windowEnd: step.windowEnd, timezone: step.timezone, isConditional: step.isConditional, stage: step.stage, targetHarvestKg: step.targetHarvestKg })) });
@@ -58,7 +58,7 @@ export class MissionRepository {
       const changed = await tx.mission.updateMany({ where: { missionId: input.missionId, farmId: input.farmId, status: "ACTIVE", approvedPlanId: input.expectedPlanId }, data: { stage: input.stage } });
       if (!changed.count) throw new Error("stale-mission");
       await tx.mission.update({ where: { missionId: input.missionId }, data: {
-        fieldBlockId: input.facts.fieldBlockId, buyerCommitmentId: input.facts.buyerCommitmentId, notes: input.facts.notes,
+        fieldBlockId: input.facts.fieldBlockId, notes: input.facts.notes,
         messages: { create: input.messages.map((message) => ({ role: message.role, content: message.content })) },
         cropBatches: { deleteMany: {}, create: input.facts.cropBatchIds.map((cropBatchId) => ({ cropBatchId })) },
         constraints: { deleteMany: {}, create: input.blocks.map((block) => ({ key: block.key, value: block.value as Prisma.InputJsonValue, provenance: block.provenance, confidence: block.confidence })) },
@@ -83,7 +83,7 @@ export class MissionRepository {
     return result.count === 1 ? this.find(farmId, missionId) : null;
   }
 
-  async recordCloseout(farmId: string, missionId: string, values: { actualHarvestKg: number; actualDriedKg: number; harvestedAreaHectares: number | null; buyerTargetMet: boolean; dryingCompleted: boolean; rejectedKg: number | null; notes: string | null; plannedHarvestKg: number; plannedDriedKg: number }) {
+  async recordCloseout(farmId: string, missionId: string, values: { actualHarvestKg: number; actualDriedKg: number; harvestedAreaHectares: number | null; dryingCompleted: boolean; rejectedKg: number | null; notes: string | null; plannedHarvestKg: number; plannedDriedKg: number }) {
     return record(await getPrisma().$transaction(async (tx) => {
       const mission = await tx.mission.findFirst({ where: { farmId, missionId, status: "CLOSEOUT", stage: "TO_REVIEW" } });
       if (!mission) return null;

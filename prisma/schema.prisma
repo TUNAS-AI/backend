@@ -48,13 +48,29 @@ model Farm {
   fieldBlocks               FieldBlock[]
   cropBatches               CropBatch[]
   fieldObservations         FieldObservation[]
-  buyerCommitments          BuyerCommitment[]
   weatherSnapshots          WeatherSnapshot[]
   missions                  Mission[]
   tunasMessages             TunasMessage[]
   tunasForecastChecks       TunasForecastCheck[]
+  googleCalendarConnection  GoogleCalendarConnection?
 
   @@map("farms")
+  @@schema("public")
+}
+
+model GoogleCalendarConnection {
+  googleCalendarConnectionId String   @id @default(uuid()) @map("google_calendar_connection_id") @db.Uuid
+  farmId                     String   @unique @map("farm_id") @db.Uuid
+  calendarId                 String   @default("primary") @map("calendar_id") @db.Text
+  encryptedAccessToken       String   @map("encrypted_access_token") @db.Text
+  encryptedRefreshToken      String   @map("encrypted_refresh_token") @db.Text
+  tokenExpiresAt             DateTime @map("token_expires_at") @db.Timestamptz(6)
+  scopes                     String   @db.Text
+  createdAt                  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  farm                       Farm     @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
+
+  @@map("google_calendar_connections")
   @@schema("public")
 }
 
@@ -62,7 +78,6 @@ model Mission {
   missionId       String                @id @default(uuid()) @map("mission_id") @db.Uuid
   farmId          String                @map("farm_id") @db.Uuid
   fieldBlockId    String?               @map("field_block_id") @db.Uuid
-  buyerCommitmentId String?             @map("buyer_commitment_id") @db.Uuid
   status          String                @default("ACTIVE") @db.Text
   stage           String                @default("WAITING") @db.Text
   originalMessage String                @map("original_message") @db.Text
@@ -72,7 +87,6 @@ model Mission {
   updatedAt       DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
   farm            Farm                  @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
   fieldBlock      FieldBlock?           @relation("MissionFieldBlock", fields: [farmId, fieldBlockId], references: [farmId, fieldBlockId])
-  buyerCommitment BuyerCommitment?      @relation("MissionBuyerCommitment", fields: [farmId, buyerCommitmentId], references: [farmId, buyerCommitmentId])
   cropBatches     MissionCropBatch[]    @relation("MissionCropBatches")
   messages        MissionMessage[]
   tunasMessages   TunasMessage[]
@@ -243,7 +257,6 @@ model MissionCloseout {
   actualHarvestKg   Decimal  @map("actual_harvest_kg") @db.Decimal(14, 3)
   actualDriedKg     Decimal  @map("actual_dried_kg") @db.Decimal(14, 3)
   harvestedAreaHectares Decimal? @map("harvested_area_hectares") @db.Decimal(12, 4)
-  buyerTargetMet    Boolean  @map("buyer_target_met")
   dryingCompleted   Boolean  @map("drying_completed")
   rejectedKg        Decimal? @map("rejected_kg") @db.Decimal(14, 3)
   notes             String?  @db.Text
@@ -292,7 +305,6 @@ model CropBatch {
   updatedAt         DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
   farm              Farm                @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
   fieldBlock        FieldBlock          @relation("FieldBlockCropBatches", fields: [farmId, fieldBlockId], references: [farmId, fieldBlockId], onDelete: Cascade)
-  buyerCommitments  BuyerCommitment[]
   missionLinks      MissionCropBatch[]  @relation("MissionCropBatches")
 
   @@index([farmId, fieldBlockId])
@@ -319,29 +331,6 @@ model FieldObservation {
   @@index([fieldBlockId, observedAt])
   @@index([cropBatchId, observedAt])
   @@map("field_observations")
-  @@schema("public")
-}
-
-model BuyerCommitment {
-  buyerCommitmentId String    @id @default(uuid()) @map("buyer_commitment_id") @db.Uuid
-  farmId            String    @map("farm_id") @db.Uuid
-  cropBatchId       String    @map("crop_batch_id") @db.Uuid
-  buyerName         String    @map("buyer_name") @db.Text
-  quantityKg        Decimal   @map("quantity_kg") @db.Decimal(14, 3)
-  targetGrade       String?   @map("target_grade") @db.Text
-  deadline          DateTime  @db.Timestamptz(6)
-  notes             String?   @db.Text
-  status            String    @default("active") @db.Text
-  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
-  farm              Farm      @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
-  cropBatch         CropBatch @relation(fields: [farmId, cropBatchId], references: [farmId, cropBatchId], onDelete: Cascade)
-  missions          Mission[] @relation("MissionBuyerCommitment")
-
-  @@index([farmId, deadline])
-  @@index([cropBatchId, deadline])
-  @@unique([farmId, buyerCommitmentId])
-  @@map("buyer_commitments")
   @@schema("public")
 }
 

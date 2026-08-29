@@ -26,14 +26,18 @@ test("mission migration persists approval-ready plans and calendar projections",
 test("active lifecycle schema persists stages, fact provenance, and closeout metrics", () => {
   const schema = readFileSync(resolve("prisma/schema.prisma"), "utf8");
   const sql = readFileSync(resolve("prisma/migrations/20260716110000_add_active_mission_lifecycle/migration.sql"), "utf8");
+  const removalSql = readFileSync(resolve("prisma/migrations/20260717120000_remove_buyer_commitments/migration.sql"), "utf8");
   assert.match(schema, /stage\s+String\s+@default\("WAITING"\)/);
-  assert.match(schema, /buyerTargetMet\s+Boolean/);
+  assert.doesNotMatch(schema, /buyerTargetMet\s+Boolean/);
   assert.match(schema, /dryingCompleted\s+Boolean/);
   assert.match(schema, /model MissionCloseout/);
   assert.match(schema, /plannedHarvestKg/);
   assert.match(schema, /provenance\s+String/);
   assert.match(sql, /CREATE TABLE public\.mission_closeouts/i);
   assert.match(sql, /ADD COLUMN stage text/i);
+  assert.match(removalSql, /DROP COLUMN IF EXISTS buyer_commitment_id/i);
+  assert.match(removalSql, /DROP COLUMN IF EXISTS buyer_target_met/i);
+  assert.match(removalSql, /DROP TABLE IF EXISTS public\.buyer_commitments/i);
 });
 
 test("happy-path lifecycle constrains mission and step states", () => {

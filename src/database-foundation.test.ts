@@ -13,6 +13,7 @@ const buyerNotesMigrationPath = resolve("prisma/migrations/20260715180000_replac
 const operationalCapacityRemovalMigrationPath = resolve("prisma/migrations/20260715190000_remove_operational_capacities/migration.sql");
 const farmNotesMigrationPath = resolve("prisma/migrations/20260715200000_add_farm_notes/migration.sql");
 const requiredFieldCoordinatesMigrationPath = resolve("prisma/migrations/20260715210000_require_field_block_coordinates/migration.sql");
+const googleCalendarMigrationPath = resolve("prisma/migrations/20260717150000_add_google_calendar_connections/migration.sql");
 const prismaConfigPath = resolve("prisma.config.ts");
 
 const requiredTables = [
@@ -21,7 +22,6 @@ const requiredTables = [
   "field_blocks",
   "crop_batches",
   "field_observations",
-  "buyer_commitments",
   "weather_snapshots",
 ];
 
@@ -48,7 +48,6 @@ test("foundation migration creates ownership constraints, indexes, and every req
   assert.match(sql, /owner_id\s+uuid\s+NOT NULL\s+UNIQUE/i);
   assert.match(sql, /REFERENCES public\.users\s*\(id\)\s*ON DELETE CASCADE/i);
   assert.match(sql, /REFERENCES public\.farms\s*\(farm_id\)\s*ON DELETE CASCADE/i);
-  assert.match(sql, /CREATE INDEX .*buyer_commitments.*deadline/i);
   assert.match(sql, /CREATE INDEX .*weather_snapshots.*observed_at/i);
 });
 
@@ -143,7 +142,7 @@ test("shallot onboarding realignment retains only the current onboarding data", 
   assert.match(schema, /model FieldObservation/);
   assert.doesNotMatch(schema, /model PostharvestCapacity/);
   assert.doesNotMatch(schema, /model CrateCapacity/);
-  assert.doesNotMatch(schema, /model GoogleCalendarConnection/);
+  assert.match(schema, /model GoogleCalendarConnection[\s\S]*?farmId\s+String\s+@unique[\s\S]*?encryptedRefreshToken\s+String[\s\S]*?@@map\("google_calendar_connections"\)/);
   assert.doesNotMatch(schema, /model WorkerAvailabilityWindow/);
   assert.doesNotMatch(schema, /model OperationalCapacity/);
   assert.doesNotMatch(schema, /operationalCapacities\s+OperationalCapacity\[\]/);
@@ -158,6 +157,8 @@ test("shallot onboarding realignment retains only the current onboarding data", 
   assert.match(sql, /DROP TABLE public\.postharvest_capacities/i);
   assert.match(sql, /DROP TABLE public\.crate_capacities/i);
   assert.match(sql, /DROP TABLE public\.google_calendar_connections/i);
+  assert.ok(existsSync(googleCalendarMigrationPath), "Google Calendar connection migration should exist");
+  assert.match(readFileSync(googleCalendarMigrationPath, "utf8"), /CREATE TABLE public\.google_calendar_connections[\s\S]*?encrypted_refresh_token text NOT NULL/i);
   assert.match(cropBatchSimplificationSql, /DROP COLUMN crop_stage/i);
   assert.match(cropBatchSimplificationSql, /DROP COLUMN estimated_harvest_readiness/i);
   assert.match(cropBatchSimplificationSql, /DROP COLUMN harvest_round/i);

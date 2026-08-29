@@ -38,7 +38,7 @@ export const openApiDocument = swaggerJSDoc({
       description: "The web app uses Google sign-in through its frontend callback. Swagger has its own browser-only token handoff.",
     },
     servers: [{ url: "http://localhost:3000", description: "Local development" }],
-    tags: [{ name: "Authentication" }, { name: "Onboarding" }, { name: "Farms" }, { name: "Field blocks" }, { name: "Crop batches" }, { name: "Buyer commitments" }, { name: "Missions" }, { name: "System" }],
+    tags: [{ name: "Authentication" }, { name: "Onboarding" }, { name: "Farms" }, { name: "Field blocks" }, { name: "Crop batches" }, { name: "Missions" }, { name: "System" }],
     components: {
       securitySchemes: {
         bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" },
@@ -185,40 +185,15 @@ export const openApiDocument = swaggerJSDoc({
             fields: { type: "array", minItems: 1, items: { $ref: "#/components/schemas/OnboardingFieldInput" } },
           },
         },
-        BuyerCommitmentCreateInput: {
-          type: "object",
-          required: ["cropBatchId", "buyerName", "quantityKg", "deadline"],
-          properties: {
-            cropBatchId: { type: "string", format: "uuid" },
-            buyerName: { type: "string", example: "Pasar Induk" },
-            quantityKg: { type: "number", exclusiveMinimum: true, minimum: 0, example: 500 },
-            targetGrade: { type: "string", nullable: true, example: "A" },
-            deadline: { type: "string", format: "date-time", example: "2026-07-24T09:00:00.000Z" },
-            notes: { type: "string", nullable: true, example: "No overtime" },
-            status: { type: "string", example: "active" },
-          },
-        },
-        BuyerCommitmentUpdateInput: {
-          type: "object",
-          properties: {
-            cropBatchId: { type: "string", format: "uuid" },
-            buyerName: { type: "string", example: "Pasar Induk" },
-            quantityKg: { type: "number", exclusiveMinimum: true, minimum: 0, example: 500 },
-            targetGrade: { type: "string", nullable: true },
-            deadline: { type: "string", format: "date-time" },
-            notes: { type: "string", nullable: true },
-            status: { type: "string" },
-          },
-        },
         MissionPreviewMessageInput: {
           type: "object", required: ["role", "content"], additionalProperties: false,
           properties: { role: { type: "string", enum: ["farmer", "assistant"] }, content: { type: "string", minLength: 1, maxLength: 4000 } },
         },
         MissionPreviewFactsInput: {
-          type: "object", required: ["fieldBlockId", "cropBatchIds", "buyerCommitmentId", "buyerQuantityKg", "marketQuality", "plannedHarvestKg", "plannedDriedKg", "deadline", "availableWorkerCount", "coveredDryingCapacityKg", "notes", "clarification"], additionalProperties: false,
+          type: "object", required: ["fieldBlockId", "cropBatchIds", "marketQuality", "plannedHarvestKg", "plannedDriedKg", "deadline", "availableWorkerCount", "coveredDryingCapacityKg", "notes", "clarification"], additionalProperties: false,
           properties: {
-            fieldBlockId: { type: "string", format: "uuid", nullable: true }, cropBatchIds: { type: "array", maxItems: 12, items: { type: "string", format: "uuid" } }, buyerCommitmentId: { type: "string", format: "uuid", nullable: true },
-            buyerQuantityKg: { type: "number", exclusiveMinimum: true, minimum: 0, nullable: true }, marketQuality: { type: "string", enum: ["Grade A", "Grade B", "Grade C"], nullable: true }, plannedHarvestKg: { type: "number", exclusiveMinimum: true, minimum: 0, nullable: true }, plannedDriedKg: { type: "number", exclusiveMinimum: true, minimum: 0, nullable: true }, deadline: { oneOf: [{ type: "string", format: "date-time" }, { type: "string", format: "date" }, { type: "null" }] }, availableWorkerCount: { type: "integer", minimum: 1, nullable: true }, coveredDryingCapacityKg: { type: "number", exclusiveMinimum: true, minimum: 0, nullable: true }, notes: { type: "string", nullable: true },
+            fieldBlockId: { type: "string", format: "uuid", nullable: true }, cropBatchIds: { type: "array", maxItems: 12, items: { type: "string", format: "uuid" } },
+            marketQuality: { type: "string", enum: ["Grade A", "Grade B", "Grade C"], nullable: true }, plannedHarvestKg: { type: "number", exclusiveMinimum: true, minimum: 0, nullable: true }, plannedDriedKg: { type: "number", exclusiveMinimum: true, minimum: 0, nullable: true }, deadline: { oneOf: [{ type: "string", format: "date-time" }, { type: "string", format: "date" }, { type: "null" }] }, availableWorkerCount: { type: "integer", minimum: 1, nullable: true }, coveredDryingCapacityKg: { type: "number", exclusiveMinimum: true, minimum: 0, nullable: true }, notes: { type: "string", nullable: true },
             clarification: { type: "object", nullable: true, required: ["key", "question"], properties: { key: { type: "string" }, question: { type: "string" } } },
           },
         },
@@ -228,7 +203,7 @@ export const openApiDocument = swaggerJSDoc({
         },
         MissionFactReview: {
           type: "object", required: ["key", "status", "reason", "provenance", "confidence"], additionalProperties: false,
-          properties: { key: { type: "string", enum: ["fieldBlockId", "cropBatchIds", "buyerCommitmentId", "buyerQuantityKg", "marketQuality", "plannedHarvestKg", "plannedDriedKg", "deadline", "availableWorkerCount", "coveredDryingCapacityKg", "notes"] }, status: { type: "string", enum: ["confirmed", "needs_clarification", "missing"] }, reason: { type: "string" }, provenance: { type: "string", enum: ["FARMER_REPORTED", "INFERRED"] }, confidence: { type: "string", enum: ["high", "medium", "low"] } },
+          properties: { key: { type: "string", enum: ["fieldBlockId", "cropBatchIds", "marketQuality", "plannedHarvestKg", "plannedDriedKg", "deadline", "availableWorkerCount", "coveredDryingCapacityKg", "notes"] }, status: { type: "string", enum: ["confirmed", "needs_clarification", "missing"] }, reason: { type: "string" }, provenance: { type: "string", enum: ["FARMER_REPORTED", "INFERRED"] }, confidence: { type: "string", enum: ["high", "medium", "low"] } },
         },
         MissionPreviewCandidateInput: {
           type: "object", required: ["previewId", "messages", "facts"], additionalProperties: false,
@@ -240,7 +215,7 @@ export const openApiDocument = swaggerJSDoc({
         MissionReplanConfirmInput: { type: "object", required: ["previewToken", "planId", "stage"], properties: { previewToken: { type: "string" }, planId: { type: "string", format: "uuid" }, stage: { type: "string", enum: ["WAITING", "HARVESTING", "DRYING"] } } },
         MissionStageInput: { type: "object", required: ["stage"], properties: { stage: { type: "string", enum: ["HARVESTING", "DRYING", "FINISHED", "TO_REVIEW"] } } },
         MissionStepStatusInput: { type: "object", required: ["status"], properties: { status: { type: "string", enum: ["IN_PROGRESS", "COMPLETED"] } } },
-        MissionCloseoutInput: { type: "object", required: ["actualHarvestKg", "actualDriedKg", "buyerTargetMet", "dryingCompleted"], properties: { actualHarvestKg: { type: "number", minimum: 0 }, actualDriedKg: { type: "number", minimum: 0 }, harvestedAreaHectares: { type: "number", minimum: 0, nullable: true }, buyerTargetMet: { type: "boolean" }, dryingCompleted: { type: "boolean" }, rejectedKg: { type: "number", minimum: 0, nullable: true }, notes: { type: "string", nullable: true } } },
+        MissionCloseoutInput: { type: "object", required: ["actualHarvestKg", "actualDriedKg", "dryingCompleted"], properties: { actualHarvestKg: { type: "number", minimum: 0 }, actualDriedKg: { type: "number", minimum: 0 }, harvestedAreaHectares: { type: "number", minimum: 0, nullable: true }, dryingCompleted: { type: "boolean" }, rejectedKg: { type: "number", minimum: 0, nullable: true }, notes: { type: "string", nullable: true } } },
       },
     },
     paths: {
@@ -302,8 +277,6 @@ export const openApiDocument = swaggerJSDoc({
       "/api/field-blocks/{id}": resourceEndpoints("Field blocks", "a field block", "FieldBlockUpdateInput"),
       "/api/crop-batches": collectionEndpoints("Crop batches", "crop batches", "a crop batch", "CropBatchCreateInput"),
       "/api/crop-batches/{id}": resourceEndpoints("Crop batches", "a crop batch", "CropBatchUpdateInput"),
-      "/api/buyer-commitments": collectionEndpoints("Buyer commitments", "buyer commitments", "a buyer commitment", "BuyerCommitmentCreateInput"),
-      "/api/buyer-commitments/{id}": resourceEndpoints("Buyer commitments", "a buyer commitment", "BuyerCommitmentUpdateInput"),
       "/api/missions": {
         get: dataOperation("Missions", "List the caller's missions", { 200: { description: "Missions" } }),
         post: { ...dataOperation("Missions", "Confirm a signed planning preview", { 201: { description: "Active waiting mission created" }, 409: { description: "Preview is expired or invalid" } }), requestBody: jsonRequest("MissionConfirmInput") },
