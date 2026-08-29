@@ -1,2 +1,0 @@
-import { Router } from "express"; import { requireAuth } from "../../middleware/auth"; import { buyerCommitmentController } from "./buyer-commitment.controller";
-const router = Router(); router.use(requireAuth); router.route("/").get(buyerCommitmentController.list).post(buyerCommitmentController.create); router.route("/:id").get(buyerCommitmentController.get).patch(buyerCommitmentController.update).delete(buyerCommitmentController.delete); export default router;
