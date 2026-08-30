@@ -53,6 +53,23 @@ export class TunasRepository {
     return getPrisma().mission.findFirst({ where: { farmId, status: { in: ["ACTIVE", "CLOSEOUT"] } }, include: { missionSteps: { orderBy: { sequence: "asc" } }, constraints: true, closeout: true, operationalReports: { orderBy: { acceptedAt: "desc" }, take: 20 } }, orderBy: { updatedAt: "desc" } });
   }
 
+  async queryContext(farmId: string) {
+    return getPrisma().farm.findUniqueOrThrow({
+      where: { farmId },
+      select: {
+        name: true, location: true, notes: true, timezone: true, defaultWorkingHours: true, defaultWorkerCount: true,
+        fieldBlocks: { select: { fieldBlockId: true, name: true, areaHectares: true, status: true, notes: true }, orderBy: { createdAt: "asc" } },
+        cropBatches: { select: { cropBatchId: true, fieldBlockId: true, crop: true, variety: true, plantingDate: true, status: true, notes: true }, orderBy: { createdAt: "asc" } },
+        missions: { select: { missionId: true, fieldBlockId: true, originalMessage: true, notes: true, status: true, stage: true, createdAt: true, updatedAt: true, constraints: { select: { key: true, value: true, provenance: true, confidence: true } }, missionSteps: { select: { sequence: true, title: true, description: true, startsOn: true, endsOn: true, windowStart: true, windowEnd: true, timezone: true, stage: true, status: true, targetHarvestKg: true }, orderBy: { sequence: "asc" } }, closeout: true, operationalReports: { select: { reportType: true, observedAt: true, payload: true, narrative: true, acceptedAt: true }, orderBy: { acceptedAt: "desc" }, take: 10 } }, orderBy: { updatedAt: "desc" }, take: 10 },
+      },
+    });
+  }
+
+  async recentConversation(farmId: string, channel: string, limit: number) {
+    const items = await getPrisma().operationalInteraction.findMany({ where: { farmId, channel, status: "COMPLETED", response: { not: Prisma.DbNull } }, select: { message: true, response: true }, orderBy: { createdAt: "desc" }, take: limit });
+    return items.reverse().flatMap((item) => [{ role: "user", content: item.message }, { role: "assistant", content: typeof item.response === "object" && item.response !== null && "message" in item.response ? String(item.response.message) : "" }]).slice(-limit);
+  }
+
   async interactions(farmId: string) {
     return getPrisma().operationalInteraction.findMany({
       where: { farmId, status: "COMPLETED", response: { not: Prisma.DbNull } },

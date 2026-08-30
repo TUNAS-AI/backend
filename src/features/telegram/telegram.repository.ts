@@ -9,6 +9,10 @@ export class TelegramRepository {
     return getPrisma().telegramConnection.findUnique({ where: { userId } });
   }
 
+  identity(telegramUserId: string, telegramChatId: string) {
+    return getPrisma().telegramConnection.findFirst({ where: { telegramUserId, telegramChatId } });
+  }
+
   async createLink(userId: string, tokenHash: string, expiresAt: Date) {
     await getPrisma().telegramLinkToken.upsert({ where: { userId }, create: { userId, tokenHash, expiresAt }, update: { tokenHash, expiresAt, createdAt: new Date() } });
   }

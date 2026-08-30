@@ -18,6 +18,7 @@ export function planCreateData(missionId: string, planningRunId: string, plan: G
 
 export class MissionRepository {
   async list(farmId: string) { return (await getPrisma().mission.findMany({ where: { farmId }, select: listDetails, orderBy: { createdAt: "desc" } })).map(record); }
+  async current(farmId: string) { const value = await getPrisma().mission.findFirst({ where: { farmId, status: { in: ["ACTIVE", "CLOSEOUT"] } }, include: details, orderBy: { updatedAt: "desc" } }); return value ? record(value) : null; }
   async calendar(farmId: string, from: Date, to: Date) {
     return (await getPrisma().missionStep.findMany({
       where: { mission: { farmId, approvedPlanId: { not: null } }, status: { in: ["SCHEDULED", "IN_PROGRESS"] }, startsOn: { lte: to }, endsOn: { gte: from } },

@@ -1,5 +1,6 @@
 import { ApiError } from "../../shared/api-error";
 import { env } from "../../config/env";
+import { TelegramQueryService } from "./telegram-query.service";
 import { TelegramRepository, telegramToken, telegramTokenHash } from "./telegram.repository";
 
 const LINK_TTL_MS = 10 * 60_000;
@@ -10,6 +11,7 @@ type TelegramChat = { id: number | string; type: string };
 type TelegramMessage = { message_id: number; text?: string; chat: TelegramChat; from?: TelegramUser };
 type TelegramCallback = { id: string; data?: string; from: TelegramUser; message?: TelegramMessage };
 export type TelegramUpdate = { update_id?: number; message?: TelegramMessage; callback_query?: TelegramCallback };
+export const telegramExternalMessageId = (updateId: number | undefined, chatId: number | string, messageId: number) => updateId === undefined ? `message:${chatId}:${messageId}` : `update:${updateId}`;
 type AlertInput = { ownerId: string; missionId: string; demo: boolean; change: string; activity: string; impact: string; recommendation: string };
 type CallbackAction = { action: string; farmId: string; telegramMessageId: string | null; connection: { telegramUserId: string; telegramChatId: string }; mission: { farmId: string } };
 export function telegramCallbackAuthorized(action: CallbackAction | null, callback: TelegramCallback): action is CallbackAction { return Boolean(action && callback.message && action.action === "MOCK_REPLAN" && action.connection.telegramUserId === String(callback.from.id) && action.connection.telegramChatId === String(callback.message.chat.id) && action.telegramMessageId === String(callback.message.message_id) && action.mission.farmId === action.farmId); }
@@ -17,7 +19,7 @@ export function telegramCallbackAuthorized(action: CallbackAction | null, callba
 export class TelegramService {
   private botUsername: string | null = null;
 
-  constructor(private readonly repository = new TelegramRepository(), private readonly fetcher: typeof fetch = fetch) {}
+  constructor(private readonly repository = new TelegramRepository(), private readonly fetcher: typeof fetch = fetch, private readonly queries = new TelegramQueryService()) {}
 
   async status(ownerId: string) {
     const connection = await this.repository.status(ownerId);
@@ -37,7 +39,7 @@ export class TelegramService {
   async webhook(update: unknown) {
     const value = update as TelegramUpdate;
     if (!value || typeof value !== "object") throw new ApiError(400, "Telegram update is invalid");
-    if (value.message) await this.linkFromMessage(value.message);
+    if (value.message) await this.message(value.message, value.update_id);
     if (value.callback_query) await this.callback(value.callback_query);
     return { ok: true };
   }
@@ -67,20 +69,33 @@ export class TelegramService {
     await this.api("setWebhook", { url: webhookUrl, secret_token: webhookSecret, allowed_updates: ["message", "callback_query"], drop_pending_updates: false });
   }
 
-  private async linkFromMessage(message: TelegramMessage) {
+  private async message(message: TelegramMessage, updateId?: number) {
     const match = message.text?.match(/^\/start(?:@\w+)?\s+([A-Za-z0-9_-]{20,80})$/);
-    if (!match) return;
+    if (!message.text) return;
     if (message.chat.type !== "private" || !message.from || String(message.chat.id) !== String(message.from.id)) {
       await this.api("sendMessage", { chat_id: message.chat.id, text: "Hubungkan akun melalui chat pribadi dengan bot TUNAS." });
       return;
     }
-    try {
-      const result = await this.repository.consumeLink(telegramTokenHash(match[1]), { telegramUserId: String(message.from.id), telegramChatId: String(message.chat.id), telegramUsername: message.from.username ?? null, telegramFirstName: message.from.first_name ?? null });
-      const text = result.status === "LINKED" ? "Telegram berhasil terhubung ke akun TUNAS. Peringatan misi akan dikirim ke chat ini." : result.status === "CONNECTED" ? "Akun TUNAS ini sudah terhubung ke Telegram." : "Tautan sudah tidak berlaku. Buat tautan baru dari halaman Farm.";
-      await this.api("sendMessage", { chat_id: message.chat.id, text });
-    } catch {
-      await this.api("sendMessage", { chat_id: message.chat.id, text: "Akun Telegram ini sudah terhubung ke akun TUNAS lain." });
+    if (match) {
+      try {
+        const result = await this.repository.consumeLink(telegramTokenHash(match[1]), { telegramUserId: String(message.from.id), telegramChatId: String(message.chat.id), telegramUsername: message.from.username ?? null, telegramFirstName: message.from.first_name ?? null });
+        const text = result.status === "LINKED" ? "Telegram berhasil terhubung ke akun TUNAS. Peringatan misi akan dikirim ke chat ini." : result.status === "CONNECTED" ? "Akun TUNAS ini sudah terhubung ke Telegram." : "Tautan sudah tidak berlaku. Buat tautan baru dari halaman Farm.";
+        await this.api("sendMessage", { chat_id: message.chat.id, text });
+      } catch {
+        await this.api("sendMessage", { chat_id: message.chat.id, text: "Akun Telegram ini sudah terhubung ke akun TUNAS lain." });
+      }
+      return;
     }
+    const connection = await this.repository.identity(String(message.from.id), String(message.chat.id));
+    if (!connection) { await this.api("sendMessage", { chat_id: message.chat.id, text: "Telegram belum terhubung. Hubungkan dari halaman Farm di TUNAS." }); return; }
+    let text: string;
+    try {
+      const externalMessageId = telegramExternalMessageId(updateId, message.chat.id, message.message_id);
+      text = (await this.queries.ask(connection.userId, message.text, externalMessageId)).message;
+    } catch (error) {
+      text = error instanceof ApiError && error.status === 409 ? "Pesan ini masih diproses. Coba lagi sebentar." : "TUNAS belum dapat menjawab. Coba lagi sebentar.";
+    }
+    await this.api("sendMessage", { chat_id: message.chat.id, reply_to_message_id: message.message_id, text, parse_mode: "HTML" });
   }
 
   private async callback(callback: TelegramCallback) {

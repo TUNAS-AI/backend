@@ -110,6 +110,7 @@ export class MissionService {
   constructor(private readonly repository = new MissionRepository(), private readonly agent = new MissionAgent(), private readonly farmIdForOwner: (ownerId: string) => Promise<string> = callerFarmId, private readonly weatherForecast = getOpenMeteoForecast, private readonly calendarSync = new GoogleCalendarService()) {}
 
   async list(ownerId: string) { return this.repository.list(await this.farmIdForOwner(ownerId)); }
+  async current(ownerId: string) { return this.repository.current(await this.farmIdForOwner(ownerId)); }
   async calendar(ownerId: string, range: { from: Date; to: Date }) { return this.repository.calendar(await this.farmIdForOwner(ownerId), range.from, range.to); }
   async get(ownerId: string, missionId: string) { const mission = await this.repository.find(await this.farmIdForOwner(ownerId), missionId); if (!mission) throw new ApiError(404, "Mission not found"); return mission; }
   async delete(ownerId: string, missionId: string) {

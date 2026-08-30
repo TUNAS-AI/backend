@@ -5,7 +5,8 @@
     "mission-interpreter": "./src/agent/missions/mission-agent.ts:missionInterpretationGraph",
     "mission-planner": "./src/agent/missions/mission-agent.ts:missionPlanningGraph",
     "mission-closeout": "./src/agent/missions/mission-agent.ts:missionCloseoutGraph",
-    "operational-agent": "./src/agent/operational-agent.ts:operationalGraph"
+    "operational-agent": "./src/agent/operational-agent.ts:operationalGraph",
+    "telegram-query-agent": "./src/agent/telegram-query-agent.ts:telegramQueryGraph"
   },
   "node_version": "24",
   "env": ".env"
