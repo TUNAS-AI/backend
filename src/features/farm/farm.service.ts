@@ -15,6 +15,6 @@ export class FarmService {
     if (typeof confirmation !== "object" || confirmation === null || (confirmation as { confirmation?: unknown }).confirmation !== "DELETE_FARM") throw new ApiError(400, "confirmation must equal DELETE_FARM");
     const farmId = (await this.get(ownerId)).farmId as string;
     try { await this.calendar.removeFarmEvents(farmId); } catch (error) { console.warn("Google Calendar cleanup failed during farm deletion", { farmId, kind: error instanceof Error ? error.name : "unknown_error" }); }
-    await this.repository.delete(farmId);
+    await this.repository.delete(ownerId, farmId);
   }
 }

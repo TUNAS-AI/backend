@@ -95,6 +95,17 @@ npm run typecheck
 npm test
 ```
 
+After onboarding an account, `npm run prisma:seed` resets the oldest farm to
+the documented demo starting state: Tani Makmur Brebes, one READY Bima Brebes
+batch in Blok Utara with 650 kg estimated harvestable, four named workers,
+06:00-16:00 working hours, outdoor drying, tarpaulin protection, and no
+missions. This command is destructive to that farm's existing fields and
+missions.
+
+Deleting a farm also removes its Telegram connection, pending Telegram link,
+and farm-scoped Calendar data. The Supabase identity remains so the same Google
+account can sign in, onboard again, and explicitly reconnect Telegram.
+
 ## LangGraph Studio
 
 `langgraph.json` exports `mission-interpreter`, `mission-planner`,
@@ -146,6 +157,10 @@ Set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `NGROK_AUTHTOKEN`, and
 the configured ngrok account. Docker Compose starts the ngrok sidecar against
 the API and the backend registers `${NGROK_DOMAIN}/api/telegram/webhook` with
 Telegram.
+
+The Farm page shows a permanent link to the configured bot after Telegram is
+connected. Bot-link lookup is best-effort, so Telegram API downtime does not
+prevent farm status from loading.
 
 An authenticated farmer connects once from the Farm page. The backend creates a
 10-minute one-time token, stores only its SHA-256 hash, and binds the Telegram

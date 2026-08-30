@@ -6,6 +6,7 @@ import { TunasRepository } from "../tunas/tunas.repository";
 import { telegramToken, telegramTokenHash } from "./telegram.repository";
 import { TelegramService, telegramCallbackAuthorized, telegramExternalMessageId } from "./telegram.service";
 import { TelegramQueryService } from "./telegram-query.service";
+import { env } from "../../config/env";
 
 const action = { action: "MOCK_REPLAN", farmId: "farm", telegramMessageId: "42", connection: { telegramUserId: "7", telegramChatId: "7" }, mission: { farmId: "farm" } };
 const callback = { id: "callback", from: { id: 7 }, message: { message_id: 42, chat: { id: 7, type: "private" } } };
@@ -29,6 +30,20 @@ test("binds callbacks to the Telegram user, chat, message, farm, and mission", (
 test("uses Telegram update identity with a chat-bound message fallback", () => {
   assert.equal(telegramExternalMessageId(123, 7, 42), "update:123");
   assert.equal(telegramExternalMessageId(undefined, 7, 42), "message:7:42");
+});
+
+test("status exposes the cached bot link without depending on Telegram availability", async () => {
+  const previousToken = env.telegramBotToken;
+  env.telegramBotToken = "test-token";
+  let calls = 0;
+  const repository = { status: async () => ({ telegramUsername: "pakrudi", telegramFirstName: "Rudi", linkedAt: updatedAt }) };
+  const fetcher = async () => { calls++; return new Response(JSON.stringify({ ok: true, result: { username: "TunasDemoBot" } }), { status: 200 }); };
+  try {
+    const service = new TelegramService(repository as never, fetcher as typeof fetch);
+    assert.equal((await service.status("owner")).botUrl, "https://t.me/TunasDemoBot");
+    assert.equal((await service.status("owner")).botUrl, "https://t.me/TunasDemoBot");
+    assert.equal(calls, 1);
+  } finally { env.telegramBotToken = previousToken; }
 });
 
 test("routes Telegram operational reports to a bound approval preview", async () => {

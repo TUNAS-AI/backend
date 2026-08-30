@@ -19,8 +19,10 @@ export class FarmRepository {
   }
   async create(ownerId: string, input: FarmInput) { return record(await getPrisma().farm.create({ data: { ownerId, ...data(input), name: input.name as string, defaultWorkerCount: input.defaultWorkerCount as number } })); }
   async update(farmId: string, input: FarmInput) { return record(await getPrisma().farm.update({ where: { farmId }, data: data(input) })); }
-  async delete(farmId: string) {
+  async delete(ownerId: string, farmId: string) {
     await getPrisma().$transaction(async (tx) => {
+      await tx.telegramLinkToken.deleteMany({ where: { userId: ownerId } });
+      await tx.telegramConnection.deleteMany({ where: { userId: ownerId } });
       await tx.mission.deleteMany({ where: { farmId } });
       await tx.farm.delete({ where: { farmId } });
     });

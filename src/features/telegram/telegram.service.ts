@@ -28,8 +28,8 @@ export class TelegramService {
   constructor(private readonly repository = new TelegramRepository(), private readonly fetcher: typeof fetch = fetch, private readonly queries = new TelegramQueryService(), operationalApi: OperationalApi | null = null, private readonly missions = new MissionService()) { this.operationalApi = operationalApi; }
 
   async status(ownerId: string) {
-    const connection = await this.repository.status(ownerId);
-    return connection ? { connected: true as const, username: connection.telegramUsername, firstName: connection.telegramFirstName, linkedAt: connection.linkedAt } : { connected: false as const, username: null, firstName: null, linkedAt: null };
+    const [connection, botUrl] = await Promise.all([this.repository.status(ownerId), this.botUrl()]);
+    return connection ? { connected: true as const, username: connection.telegramUsername, firstName: connection.telegramFirstName, linkedAt: connection.linkedAt, botUrl } : { connected: false as const, username: null, firstName: null, linkedAt: null, botUrl };
   }
 
   async connect(ownerId: string) {
@@ -256,6 +256,12 @@ export class TelegramService {
     if (!bot.username) throw new ApiError(503, "Username bot Telegram tidak tersedia.");
     this.botUsername = bot.username;
     return bot.username;
+  }
+
+  private async botUrl() {
+    if (!env.telegramBotToken) return null;
+    try { return `https://t.me/${await this.username()}`; }
+    catch { return null; }
   }
 
   private configuration() {
