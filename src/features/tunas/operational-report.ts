@@ -9,7 +9,7 @@ export const operationalReportSchema = z.discriminatedUnion("reportType", [
   z.object({ ...base, reportType: z.literal("ACTIVITY_COMPLETED"), missionStepId: z.uuid(), payload: z.object({ missionStepId: z.uuid() }).strict() }).strict(),
   z.object({ ...base, reportType: z.literal("ACTUAL_QUANTITY_REPORTED"), payload: z.object({ quantityKg: z.number().finite().nonnegative() }).strict() }).strict(),
   z.object({ ...base, reportType: z.literal("WORKER_AVAILABILITY_CHANGED"), payload: z.object({ availableWorkers: z.number().int().nonnegative(), effectiveAt: isoDateTime.optional() }).strict() }).strict(),
-  z.object({ ...base, reportType: z.literal("BUYER_REQUIREMENT_CHANGED"), payload: z.object({ targetQuantityKg: z.number().finite().nonnegative(), deadline: isoDate.optional() }).strict() }).strict(),
+  z.object({ ...base, reportType: z.literal("BUYER_REQUIREMENT_CHANGED"), payload: z.object({ targetQuantityKg: z.number().finite().nonnegative(), quantityBasis: z.enum(["HARVESTED", "DRIED"]), deadline: isoDate.optional() }).strict() }).strict(),
   z.object({ ...base, reportType: z.literal("DRYING_RESOURCE_CHANGED"), payload: z.object({ available: z.boolean(), protectionAvailable: z.boolean().optional() }).strict() }).strict(),
   z.object({ ...base, reportType: z.literal("RAIN_OR_FIELD_EVENT"), payload: z.object({ event: z.string().trim().min(1).max(1000), observedAt: isoDateTime }).strict() }).strict(),
   z.object({ ...base, reportType: z.literal("MISSION_DEVIATION"), payload: z.object({ description: z.string().trim().min(1).max(2000) }).strict() }).strict(),

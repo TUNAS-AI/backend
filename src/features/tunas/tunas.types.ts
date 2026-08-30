@@ -7,4 +7,4 @@ export type OperationalPendingKind = "CLARIFICATION" | "MISSION_NOTES" | "MISSIO
 export type SemanticAction = { type: "APPROVE_REPORT" | "REJECT_REPORT" | "OPEN_REPLAN"; missionId: string | null; pendingActionId?: string };
 export type OperationalPending = { pendingActionId: string; kind: OperationalPendingKind; status: string; preview: { before: unknown; after: unknown }; actions: { approve: string; reject: string }; semanticActions?: SemanticAction[] };
 export type TunasState = { threadId: string; interactionId: string; missionId: string | null; trigger: string; message: string; pendingAction: OperationalPending | null; impact?: OperationalImpact | null; semanticActions?: SemanticAction[] };
-export type InteractionInput = { message: string; report?: OperationalReportInput; missionId: string | null; channel: string; externalMessageId: string };
+export type InteractionInput = { message: string; report?: OperationalReportInput; missionId: string | null; channel: string; externalMessageId: string; forcedTrigger?: "UPDATE" };

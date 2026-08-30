@@ -109,7 +109,7 @@ export class TunasService {
     }
     const interaction = started.interaction; const threadId = interaction.operationalThreadId; const open = await this.repository.openPending(threadId);
     try {
-      const inputState = open ? new Command({ resume: { kind: "INTERACTION", message: input.message, interactionId: interaction.operationalInteractionId } satisfies ResumePayload }) : { ownerId, farmId, missionId, threadId, interactionId: interaction.operationalInteractionId, message: input.message, channel: input.channel, structuredReport: input.report };
+      const inputState = open ? new Command({ resume: { kind: "INTERACTION", message: input.message, interactionId: interaction.operationalInteractionId } satisfies ResumePayload }) : { ownerId, farmId, missionId, threadId, interactionId: interaction.operationalInteractionId, message: input.message, channel: input.channel, structuredAction: input.forcedTrigger, structuredReport: input.report };
       const result = await getOperationalGraph().invoke(inputState as never, { configurable: { thread_id: threadId } });
       const response = isInterrupted(result) ? this.interruptedState(interaction.operationalInteractionId, threadId, missionId, result.__interrupt__[0]?.value) : result.response as TunasState;
       await this.repository.completeInteraction(interaction.operationalInteractionId, response.trigger, response);
@@ -134,6 +134,14 @@ export class TunasService {
     if (!pending) throw new ApiError(404, "Pending action not found");
     if (pending.status !== "PENDING") return this.pendingState(pending, `Pending action is already ${pending.status.toLowerCase()}.`);
     return this.resumePending(pending, "REJECTION");
+  }
+
+  async cancel(ownerId: string, pendingActionId: string): Promise<TunasState> {
+    const farmId = await this.farmIdForOwner(ownerId); const pending = await this.repository.pending(farmId, pendingActionId);
+    if (!pending) throw new ApiError(404, "Pending action not found");
+    if (pending.status !== "PENDING") return this.pendingState(pending, `Pending action is already ${pending.status.toLowerCase()}.`);
+    const cancelled = await this.repository.resolvePending({ pendingActionId, status: "REJECTED", channel: "telegram", resolution: { reason: "farmer_cancelled" } });
+    return this.pendingState(cancelled as typeof pending, "Pending workflow cancelled.");
   }
 
   private async resumePending(pending: NonNullable<Awaited<ReturnType<TunasRepository["pending"]>>>, kind: "APPROVAL" | "REJECTION") {

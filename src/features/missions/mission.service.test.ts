@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { signPreview, verifyPreview } from "./mission-preview-token";
-import { canAdvanceMissionStage, completedFieldHistory, interpretationUnavailable, isStepTransitionAllowed, logInterpretationFailure, logPlanningFailure, nextMissionStage, planningUnavailable } from "./mission.service";
+import { canAdvanceMissionStage, completedFieldHistory, interpretationUnavailable, isStepTransitionAllowed, logInterpretationFailure, logPlanningFailure, MissionService, missionVersionTimestamp, nextMissionStage, planningUnavailable } from "./mission.service";
 import { parseCloseout, parsePreviewCandidate, parseReplanConfirmation } from "./mission.validation";
 
 test("rejects a tampered mission preview", () => {
@@ -47,6 +47,29 @@ test("accepts the documented farmer closeout outcome", () => {
 
 test("allows only executable stages when confirming a replacement plan", () => {
   assert.deepEqual(parseReplanConfirmation({ previewToken: "token", planId: "00000000-0000-4000-8000-000000000001", stage: "DRYING" }), { previewToken: "token", planId: "00000000-0000-4000-8000-000000000001" });
+});
+
+test("preserves timestamp milliseconds in replan concurrency tokens", () => {
+  assert.equal(missionVersionTimestamp(new Date("2026-08-28T15:31:42.347Z")), "2026-08-28T15:31:42.347Z");
+});
+
+test("projects an explicitly typed buyer quantity into matching replan facts", async () => {
+  const facts = { fieldBlockId: "field", cropBatchIds: ["batch"], marketQuality: "Grade A" as const, plannedHarvestKg: 80, plannedDriedKg: 70, deadline: "2026-09-01", harvestDurationHours: 8, estimatedHarvestableKg: 80, rainProtectionAvailable: true, availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: null };
+  let received: typeof facts | undefined;
+  const service = { replanDraft: async () => ({ previewId: "preview", messages: [{ role: "farmer" as const, content: "mission" }], facts, review: [], blocks: [] }), replanPreview: async (_ownerId: string, _missionId: string, candidate: { facts: typeof facts }) => { received = candidate.facts; return { status: "infeasible" as const, missionId: "mission", blockers: [] }; } } as unknown as MissionService;
+  await MissionService.prototype.replanFromReport.call(service, "owner", "mission", { reportType: "BUYER_REQUIREMENT_CHANGED", observedAt: new Date().toISOString(), payload: { targetQuantityKg: 65, quantityBasis: "DRIED", deadline: "2026-08-30" } });
+  assert.equal(received?.plannedHarvestKg, 80);
+  assert.equal(received?.plannedDriedKg, 65);
+  assert.equal(received?.deadline, "2026-08-30");
+});
+
+test("carries observed rain into a report-driven replan", async () => {
+  const observedAt = "2026-08-28T08:15:00.000Z";
+  let received: unknown[] | undefined;
+  const service = { replanDraft: async () => ({ previewId: "preview", messages: [{ role: "farmer" as const, content: "mission" }], facts: {}, review: [], blocks: [] }), replanPreview: async (...args: unknown[]) => { received = args; return { status: "infeasible" as const, missionId: "mission", blockers: [] }; } } as unknown as MissionService;
+  await MissionService.prototype.replanFromReport.call(service, "owner", "mission", { reportType: "RAIN_OR_FIELD_EVENT", observedAt, payload: { event: "hujan", observedAt } });
+  assert.equal(received?.[3], "id");
+  assert.equal(received?.[4], observedAt);
 });
 
 test("uses only the selected field's six latest closeouts as planning history", () => {

@@ -89,7 +89,7 @@ export class TunasRepository {
         const thread = pending
           ? await tx.operationalThread.findUniqueOrThrow({ where: { operationalThreadId: pending.operationalThreadId } })
           : await tx.operationalThread.create({ data: { farmId: input.farmId, missionId: input.missionId, channel: input.channel } });
-        const interaction = await tx.operationalInteraction.create({ data: { ...input, operationalThreadId: thread.operationalThreadId } });
+        const interaction = await tx.operationalInteraction.create({ data: { farmId: input.farmId, missionId: input.missionId, channel: input.channel, externalMessageId: input.externalMessageId, message: input.message, operationalThreadId: thread.operationalThreadId } });
         await tx.operationalEvent.create({ data: { operationalThreadId: thread.operationalThreadId, operationalInteractionId: interaction.operationalInteractionId, farmId: input.farmId, missionId: input.missionId, actor: input.channel === "scheduled" ? "system" : "farmer", channel: input.channel, type: "INTERACTION_RECEIVED", after: { message: input.message } } });
         return { interaction, duplicate: false };
       });
@@ -221,5 +221,5 @@ export function reportImpact(report: OperationalReportInput, mission: { status: 
     const observed = report.payload.observedAt.slice(0, 10);
     if (mission.missionSteps.some((step) => step.status !== "COMPLETED" && ["HARVESTING", "DRYING"].includes(step.stage) && step.startsOn.toISOString().slice(0, 10) <= observed && step.endsOn.toISOString().slice(0, 10) >= observed)) reasons.push("Rain or field event overlaps remaining exposed work");
   }
-  return { level: reasons.length ? "MATERIAL" : "NONE", reasons, replanSupported: report.reportType === "BUYER_REQUIREMENT_CHANGED" && reasons.length > 0 && mission.status === "ACTIVE" };
+  return { level: reasons.length ? "MATERIAL" : "NONE", reasons, replanSupported: ["BUYER_REQUIREMENT_CHANGED", "RAIN_OR_FIELD_EVENT"].includes(report.reportType) && reasons.length > 0 && mission.status === "ACTIVE" };
 }

@@ -12,9 +12,8 @@ Google Calendar. Scheduled triggers are accepted, but deployment scheduling is e
 Phase 3 adds durable, transport-neutral operational interactions backed by
 Postgres and LangGraph checkpoints. It supports grounded mission queries and
 append-only typed operational reports with explicit preview and approval.
-Phase 4 begins with permanent web-to-Telegram identity linking and mission-bound
-rain alerts. Telegram replanning remains an explicit MVP simulation and never
-changes a mission schedule.
+Phase 4 adds permanent web-to-Telegram identity linking, mission-bound rain
+alerts, operational-report approval, and approval-gated mission replanning.
 
 ## Run locally
 
@@ -84,8 +83,8 @@ npm test
 ## LangGraph Studio
 
 `langgraph.json` exports `mission-interpreter`, `mission-planner`,
-`mission-closeout`, `operational-agent`, and the read-only
-`telegram-query-agent` topology from the same code used by the API. Studio supplies checkpoint persistence for its graph
+`mission-closeout`, `operational-agent`, and the Telegram query/router topology
+from the same code used by the API. Studio supplies checkpoint persistence for its graph
 runtime; API production startup requires `DATABASE_URL` and initializes the
 official LangGraph Postgres saver rather than falling back to volatile memory. Set the OpenCode
 variables above and a `LANGSMITH_API_KEY` in `backend/.env`, then start Studio
@@ -139,20 +138,47 @@ private chat after `/start`. The stored connection has no MVP disconnect action.
 Each active mission with pending harvest or drying work exposes a rain-alert demo
 button. The resulting Indonesian Telegram alert is bound to its user, farm,
 mission, chat, Telegram message, opaque action token, and 15-minute expiry. The
-`Rencanakan ulang (demo)` callback is single-use and only reports a simulation;
-it does not mutate mission state.
+rain action reloads fresh weather and creates a signed replacement-plan preview.
+The current mission remains unchanged until the farmer approves that proposal.
 
-Linked users can discuss and brainstorm from the same owner-scoped TUNAS data in
-their private Telegram chat. The exported `telegram-query-agent` LangGraph first
-loads a bounded farm, field, crop-batch, mission, schedule, constraint, closeout,
-and accepted-report snapshot plus the latest 15 Telegram turns, then Gemini
-generates a grounded Indonesian response. Commands such as `/farm`, `/missions`,
-and `/status` are treated as ordinary conversation prompts. Ambiguous mission
-questions receive a clarification question. Queries are durable and idempotent by
-Telegram update ID, but remain structurally read-only: suggestions do not change
-farm or mission state. Group messages and unlinked Telegram identities cannot
-access data. Invalid or failed model output receives a deterministic grounded
-fallback.
+Linked users converse naturally through a deterministic-first router. Obvious
+reports, replans, status requests, cancellations, and active clarification replies
+do not call the model; only an ambiguous current message uses the LLM router. Each
+selected route invokes only its specialist workflow. `/bantuan` is the sole command and
+shows natural-language examples; Telegram registers it with Bot API
+`setMyCommands` when the webhook is configured.
+
+The exported `telegram-query-agent` validates input, loads a bounded farm snapshot,
+and uses route-specific grounded instructions
+before explicit output validation and rendering. Requests to mutate data through
+`/tanya` receive a deterministic read-only explanation. Invalid or failed answer
+generation receives a deterministic grounded fallback.
+
+Operational reports use the shared checkpointed operational graph. Telegram
+shows the extracted report before storing it and binds Approve/Reject buttons to
+the linked identity, farm, mission, chat, message, single-use token, and expiry.
+Ambiguous reports resume through a focused clarification. Approved reports are
+stored once with `channel: "telegram"` and then receive deterministic impact
+evaluation. Buyer changes require an explicit `HARVESTED` or `DRIED` quantity
+basis. Material buyer or rain reports offer a user-triggered replacement-plan
+preview after report approval. Other reports remain authoritative evidence.
+The router never mutates data. On the report route, Gemini extracts a typed report
+with mission context and the server validates its schema, ownership, and state
+before showing an approval preview. On the replan route, Gemini interprets the
+request before deterministic candidate generation and bounded ranking. Every
+clarification loop stores only its mission, focused question, and bounded answers,
+allowing short follow-ups to continue without retaining general chat history.
+
+Replan proposals contain a signed preview token and recommended plan ID. Approval
+revalidates mission state, completed activities, current weather, and feasibility
+before replacing future work and optionally synchronizing Calendar. Rejection,
+expiry, replay, stale state, or infeasibility leaves the active plan unchanged.
+
+The context contains farm, field, crop-batch, mission, schedule, constraint,
+closeout, and accepted-report data. General Telegram messages are not loaded as
+model context. Queries remain
+durable and idempotent by Telegram update ID. Group messages and unlinked Telegram
+identities cannot access owner data.
 Responses use server-rendered Telegram HTML with a short heading, direct summary,
 and optional `Fakta utama`, `Saran`, and `Perlu klarifikasi` sections. Gemini
 returns structured fields only; all displayed content is HTML-escaped before send.

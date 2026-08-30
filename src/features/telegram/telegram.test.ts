@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { buildTelegramQueryGraph, createTelegramAnswerer, fallbackTelegramAnswer, renderTelegramAnswer } from "../../agent/telegram-query-agent";
+import { buildTelegramQueryGraph, classifyTelegramIntent, createTelegramAnswerer, createTelegramRouter, deterministicTelegramIntent, fallbackTelegramAnswer, renderTelegramAnswer } from "../../agent/telegram-query-agent";
 import { TunasRepository } from "../tunas/tunas.repository";
 import { telegramToken, telegramTokenHash } from "./telegram.repository";
-import { telegramCallbackAuthorized, telegramExternalMessageId } from "./telegram.service";
+import { TelegramService, telegramCallbackAuthorized, telegramExternalMessageId } from "./telegram.service";
+import { TelegramQueryService } from "./telegram-query.service";
 
 const action = { action: "MOCK_REPLAN", farmId: "farm", telegramMessageId: "42", connection: { telegramUserId: "7", telegramChatId: "7" }, mission: { farmId: "farm" } };
 const callback = { id: "callback", from: { id: 7 }, message: { message_id: 42, chat: { id: 7, type: "private" } } };
+const updatedAt = new Date("2026-08-28T10:00:00.000Z");
 
 test("creates opaque Telegram tokens and hashes stored values", () => {
   const token = telegramToken();
@@ -29,31 +31,115 @@ test("uses Telegram update identity with a chat-bound message fallback", () => {
   assert.equal(telegramExternalMessageId(undefined, 7, 42), "message:7:42");
 });
 
+test("routes Telegram operational reports to a bound approval preview", async () => {
+  let queryCalls = 0; let actionPayload: unknown; let interactionInput: { message: string; forcedTrigger?: string } | undefined; const requests: Array<Record<string, unknown>> = [];
+  const repository = {
+    identity: async () => ({ userId: "owner", telegramConnectionId: "connection", telegramChatId: "7" }), openOperationalPending: async () => null, openReplanClarification: async () => null,
+    ownerMission: async () => ({ farmId: "farm", farm: { owner: { telegramConnection: { telegramConnectionId: "connection" } } } }),
+    createAction: async (input: { payload: unknown }) => { actionPayload = input.payload; return { telegramActionId: "action" }; }, bindActionMessage: async () => undefined, deleteAction: async () => undefined,
+  };
+  const fetcher = async (_url: string | URL | Request, init?: RequestInit) => { requests.push(JSON.parse(String(init?.body))); return new Response(JSON.stringify({ ok: true, result: { message_id: 99 } }), { status: 200 }); };
+  const queries = { route: async () => ({ intent: "REPORT", continuation: false, history: [] }), ask: async () => { queryCalls++; throw new Error("query path should not run"); } };
+  const operations = {
+    interact: async (_owner: string, input: { message: string; forcedTrigger?: string }) => {
+      interactionInput = input;
+      return { threadId: "thread", interactionId: "interaction", missionId: "mission", trigger: "UPDATE", message: "review", pendingAction: { pendingActionId: "pending", kind: "OPERATIONAL_REPORT", status: "PENDING", preview: { before: null, after: { reportType: "ACTUAL_QUANTITY_REPORTED", observedAt: updatedAt.toISOString(), payload: { quantityKg: 70 } } }, actions: { approve: "", reject: "" } } };
+    },
+    approve: async () => { throw new Error("unused"); }, reject: async () => { throw new Error("unused"); }, cancel: async () => { throw new Error("unused"); },
+  };
+  const service = new TelegramService(repository as never, fetcher as typeof fetch, queries as never, operations as never, {} as never);
+  await service.webhook({ update_id: 10, message: { message_id: 20, text: "hasil aktual 70 kg", chat: { id: 7, type: "private" }, from: { id: 7 } } });
+  assert.equal(queryCalls, 0);
+  assert.equal(interactionInput?.message, "hasil aktual 70 kg");
+  assert.equal(interactionInput?.forcedTrigger, "UPDATE");
+  assert.deepEqual(actionPayload, { pendingActionId: "pending", report: { reportType: "ACTUAL_QUANTITY_REPORTED", observedAt: updatedAt.toISOString(), payload: { quantityKg: 70 } } });
+  assert.match(JSON.stringify(requests), /Setujui/);
+  assert.match(JSON.stringify(requests), /Tinjau laporan operasional/);
+});
+
+test("persists only the active replan clarification transcript", async () => {
+  let payload: unknown; const requests: Array<Record<string, unknown>> = [];
+  const repository = { identity: async () => ({ userId: "owner", telegramConnectionId: "connection", telegramChatId: "7" }), openOperationalPending: async () => null, openReplanClarification: async () => ({ telegramActionId: "clarification", missionId: "mission", payload: { messages: ["Atur ulang karena hujan"] } }), updateActionPayload: async (_id: string, value: unknown) => { payload = value; } };
+  const fetcher = async (_url: string | URL | Request, init?: RequestInit) => { requests.push(JSON.parse(String(init?.body))); return new Response(JSON.stringify({ ok: true, result: { message_id: 100 } }), { status: 200 }); };
+  const queries = { route: async () => ({ intent: "REPLAN", continuation: true }) };
+  const missions = { replanFromInstruction: async (_owner: string, _mission: string, transcript: string) => { assert.equal(transcript, "Atur ulang karena hujan\n3"); return { status: "clarification", missionId: "mission", question: "Apakah tiga pekerja tersedia sepanjang hari?" }; } };
+  const service = new TelegramService(repository as never, fetcher as typeof fetch, queries as never, null, missions as never);
+  await service.webhook({ update_id: 11, message: { message_id: 21, text: "3", chat: { id: 7, type: "private" }, from: { id: 7 } } });
+  assert.deepEqual(payload, { messages: ["Atur ulang karena hujan", "3"], question: "Apakah tiga pekerja tersedia sepanjang hari?" });
+  assert.match(JSON.stringify(requests), /Apakah tiga pekerja/);
+});
+
 test("uses the shared structured runtime for grounded Indonesian conversation", async () => {
   let prompt = "";
   const output = { title: "Prioritas", summary: "Misi pengeringan paling mendesak karena jadwalnya besok.", facts: ["Tahap: pengeringan"], suggestions: ["Siapkan penutup."], clarification: null };
   const answerer = createTelegramAnswerer(() => ({ withStructuredOutput: () => ({ invoke: async (messages: Array<{ content: unknown }>) => { prompt = messages.map((message) => String(message.content)).join("\n"); return output; } }) }));
-  assert.deepEqual(await answerer({ question: "Mana yang mendesak?", context: { missions: [{ status: "ACTIVE" }] }, history: [{ user: "Bahas misi", assistant: "Baik." }] }), output);
-  assert.match(prompt, /RIWAYAT 15 PESAN TERAKHIR/);
+  assert.deepEqual(await answerer({ question: "Mana yang mendesak?", context: { missions: [{ status: "ACTIVE" }] } }), output);
+  assert.doesNotMatch(prompt, /Bahas misi|RIWAYAT/);
   assert.match(prompt, /Bedakan fakta tersimpan dari saran/);
   assert.match(prompt, /Mana yang mendesak/);
 });
 
-test("LangGraph loads authoritative context and conversation before answering", async () => {
-  let received: { question: string; context: unknown; history: unknown[] } | undefined;
+test("routes ambiguous messages without Telegram history or farm context", async () => {
+  let prompt = "";
+  const router = createTelegramRouter(() => ({ withStructuredOutput: () => ({ invoke: async (messages: Array<{ content: unknown }>) => { prompt = messages.map((item) => String(item.content)).join("\n"); return { intent: "REPLAN", continuation: true }; } }) }));
+  assert.deepEqual(await router({ message: "3" }), { intent: "REPLAN", continuation: true });
+  assert.doesNotMatch(prompt, /Berapa pekerja yang tersedia/);
+  assert.match(prompt, /MESSAGE: "3"/);
+  assert.match(prompt, /tanpa riwayat atau data kebun/);
+});
+
+test("routes obvious reports without loading context, history, or the model", async () => {
+  let calls = 0;
+  const service = new TelegramQueryService({} as TunasRepository, async () => { throw new Error("unused"); }, async () => { calls += 1; throw new Error("unused"); });
+  assert.deepEqual(await service.route("owner", "hujan mulai sekarang", null), { intent: "REPORT", continuation: false });
+  assert.equal(calls, 0);
+});
+
+test("LangGraph loads authoritative context without conversation history", async () => {
+  let received: { question: string; context: unknown; guidance?: string } | undefined;
   const repository = { queryContext: async (farmId: string) => ({ name: "Kebun Makmur", farmId, missions: [] }), recentConversation: async (_farmId: string, channel: string, limit: number) => [{ role: "user", content: `${channel}:${limit}` }] } as unknown as TunasRepository;
-  const graph = buildTelegramQueryGraph(repository, async (input) => { received = input; return { title: "Pilihan", summary: "Mari bandingkan dua pilihan itu.", facts: [], suggestions: ["Tinjau jadwal."], clarification: null }; });
+  const graph = buildTelegramQueryGraph(repository, async (input) => { received = input; return { title: "Pilihan", summary: "Mari bandingkan dua pilihan itu.", facts: [], suggestions: ["Tinjau jadwal."], clarification: null }; }, async () => ({ intent: "ADVISORY" }));
   const result = await graph.invoke({ farmId: "farm-1", question: "Bagaimana kalau panen ditunda?" });
   assert.match(result.answer, /<b>Pilihan<\/b>/);
   assert.match(result.answer, /<b>Saran<\/b>/);
-  assert.deepEqual(received, { question: "Bagaimana kalau panen ditunda?", context: { name: "Kebun Makmur", farmId: "farm-1", missions: [] }, history: [{ role: "user", content: "telegram:15" }] });
+  assert.deepEqual(received, { question: "Bagaimana kalau panen ditunda?", context: { name: "Kebun Makmur", farmId: "farm-1", missions: [] }, guidance: "Berikan beberapa pilihan praktis; pisahkan setiap saran dari fakta tersimpan." });
+  assert.equal(result.intent, "ADVISORY");
+  assert.equal(result.routingSource, "AI");
+});
+
+test("routes mutation requests to a deterministic read-only response", async () => {
+  let answerCalls = 0;
+  const repository = { queryContext: async () => ({ missions: [] }), recentConversation: async () => [] } as unknown as TunasRepository;
+  const graph = buildTelegramQueryGraph(repository, async () => { answerCalls += 1; return {}; }, async () => ({ intent: "MUTATION_REQUEST" }));
+  const result = await graph.invoke({ farmId: "farm", question: "Ubah jadwal panen besok" });
+  assert.equal(answerCalls, 0);
+  assert.equal(result.intent, "MUTATION_REQUEST");
+  assert.match(result.answer, /Mode baca saja/);
+  assert.match(result.answer, /Tidak ada data yang diubah/);
+});
+
+test("falls back to deterministic intent routing when classification fails", async () => {
+  assert.equal(deterministicTelegramIntent("Apa status misi saya?"), "FACTUAL_QUERY");
+  assert.equal(deterministicTelegramIntent("Tolong ubah jadwal"), "MUTATION_REQUEST");
+  assert.equal(deterministicTelegramIntent("Panen sudah selesai"), "OPERATIONAL_REPORT");
+  assert.deepEqual(await classifyTelegramIntent("Bagaimana kalau panen ditunda?", async () => { throw new Error("offline"); }), { intent: "ADVISORY", routingSource: "DETERMINISTIC_FALLBACK", routingFailure: "PROVIDER_FAILURE" });
+});
+
+test("rejects invalid input before loading farm data", async () => {
+  let repositoryCalls = 0;
+  const repository = { queryContext: async () => { repositoryCalls += 1; return {}; }, recentConversation: async () => [] } as unknown as TunasRepository;
+  const graph = buildTelegramQueryGraph(repository, async () => ({}), async () => ({ intent: "GENERAL" }));
+  const result = await graph.invoke({ farmId: "farm", question: "   " });
+  assert.equal(repositoryCalls, 0);
+  assert.equal(result.routingFailure, "INVALID_INPUT");
+  assert.match(result.answer, /Pesan belum dapat diproses/);
 });
 
 test("uses a grounded deterministic fallback when answer generation fails", async () => {
   const context = { missions: [{ originalMessage: "Keringkan bawang", status: "ACTIVE", stage: "DRYING" }] };
   assert.match(fallbackTelegramAnswer(context), /Keringkan bawang/);
   const repository = { queryContext: async () => context, recentConversation: async () => [] } as unknown as TunasRepository;
-  const graph = buildTelegramQueryGraph(repository, async () => { throw new Error("provider unavailable"); });
+  const graph = buildTelegramQueryGraph(repository, async () => { throw new Error("provider unavailable"); }, async () => ({ intent: "FACTUAL_QUERY" }));
   assert.match((await graph.invoke({ farmId: "farm", question: "Apa berikutnya?" })).answer, /ACTIVE \/ DRYING/);
 });
 

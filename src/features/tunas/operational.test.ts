@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { Command, isInterrupted, MemorySaver } from "@langchain/langgraph";
-import { buildOperationalGraph, classifyOperationalMessage, deterministicReport, deterministicRoute, isExpectedStateCurrent, operationalQueryAnswer, parseMutationProposal, structuredRoute, type OperationalDependencies } from "../../agent/operational-agent";
+import { buildOperationalGraph, classifyOperationalMessage, createOperationalReportExtractor, deterministicRoute, extractOperationalReport, isExpectedStateCurrent, operationalQueryAnswer, parseMutationProposal, structuredRoute, type OperationalDependencies } from "../../agent/operational-agent";
 import { parseInteraction } from "./tunas.validation";
 import { reportImpact, TunasRepository } from "./tunas.repository";
 import { MissionService } from "../missions/mission.service";
@@ -33,6 +33,7 @@ test("uses AI classification first and conservatively falls back on failures or 
 
 test("structured actions and scheduled triggers bypass AI routing", () => {
   assert.equal(structuredRoute("anything", "scheduled"), "SCHEDULED");
+  assert.equal(structuredRoute("mulai hujan", "telegram", "UPDATE"), "UPDATE");
   assert.equal(structuredRoute("anything", "web", "APPROVAL"), "APPROVAL");
 });
 
@@ -70,21 +71,30 @@ test("strictly validates every report payload and structured interaction shape",
   assert.equal(parseInteraction({ report: valid, missionId: mission.missionId, externalMessageId: "report-1" }, undefined).report?.reportType, "WORKER_AVAILABILITY_CHANGED");
 });
 
-test("natural language resolves activity titles without UUIDs", () => {
-  const report = deterministicReport("started Harvest", mission as never, updatedAt);
-  assert.equal(report?.reportType, "ACTIVITY_STARTED");
-  assert.equal(report?.missionStepId, mission.missionSteps[0].missionStepId);
+test("report specialist returns one report or null and normalizes observed time", async () => {
+  let prompt = "";
+  const extractor = createOperationalReportExtractor(() => ({ withStructuredOutput: () => ({ invoke: async (messages: Array<{ content: unknown }>) => { prompt = messages.map((item) => String(item.content)).join("\n"); return { report: { reportType: "RAIN_OR_FIELD_EVENT", observedAt: "2020-01-01T00:00:00.000Z", payload: { event: "hujan", observedAt: "2020-01-01T00:00:00.000Z" } }, clarification: null }; } }) }));
+  const report = await extractOperationalReport("hujan", mission as never, extractor, updatedAt);
+  assert.equal(report.report?.reportType, "RAIN_OR_FIELD_EVENT");
+  assert.equal(report.report?.observedAt, updatedAt.toISOString());
+  await extractor("kendala lapangan", mission as never);
+  assert.match(prompt, /bukan ACTIVITY_STARTED/);
+  assert.deepEqual(await extractOperationalReport("test", mission as never, async () => ({ report: null, clarification: "Apa yang terjadi di lapangan?" }), updatedAt), { report: null, clarification: "Apa yang terjadi di lapangan?" });
 });
 
 test("evaluates only specified operational impacts", () => {
   assert.equal(reportImpact({ reportType: "GENERAL_OPERATIONAL_NOTE", observedAt: updatedAt.toISOString(), payload: { text: "ok" } }, mission as never).level, "NONE");
-  assert.equal(reportImpact({ reportType: "BUYER_REQUIREMENT_CHANGED", observedAt: updatedAt.toISOString(), payload: { targetQuantityKg: 90 } }, mission as never).level, "MATERIAL");
+  assert.equal(reportImpact({ reportType: "BUYER_REQUIREMENT_CHANGED", observedAt: updatedAt.toISOString(), payload: { targetQuantityKg: 90, quantityBasis: "DRIED" } }, mission as never).level, "MATERIAL");
   const active = { ...mission, missionSteps: [{ ...mission.missionSteps[0], status: "IN_PROGRESS" }] };
   assert.equal(reportImpact({ reportType: "WORKER_AVAILABILITY_CHANGED", observedAt: updatedAt.toISOString(), payload: { availableWorkers: 0 } }, active as never).level, "MATERIAL");
+  const rain = reportImpact({ reportType: "RAIN_OR_FIELD_EVENT", observedAt: "2026-08-28T08:00:00.000Z", payload: { event: "hujan", observedAt: "2026-08-28T08:00:00.000Z" } }, active as never);
+  assert.equal(rain.level, "MATERIAL");
+  assert.equal(rain.replanSupported, true);
 });
 
 test("operational schema enforces duplicate protection and append-only timeline storage", () => {
   const schema = readFileSync("prisma/schema.prisma", "utf8");
+  const repository = readFileSync("src/features/tunas/tunas.repository.ts", "utf8");
   const migration = readFileSync("prisma/migrations/20260827120000_add_operational_interactions/migration.sql", "utf8");
   assert.match(schema, /@@unique\(\[farmId, channel, externalMessageId\]\)/);
   assert.match(schema, /model PendingAction/);
@@ -96,6 +106,10 @@ test("operational schema enforces duplicate protection and append-only timeline 
   const reportsMigration = readFileSync("prisma/migrations/20260827160000_add_operational_reports/migration.sql", "utf8");
   assert.match(reportsMigration, /CREATE TABLE public\.operational_reports/);
   assert.match(reportsMigration, /ADD COLUMN revision integer NOT NULL DEFAULT 1/);
+  const telegramMigration = readFileSync("prisma/migrations/20260828120000_expand_telegram_actions/migration.sql", "utf8");
+  assert.match(telegramMigration, /ADD COLUMN payload jsonb/);
+  assert.match(telegramMigration, /CREATE UNIQUE INDEX telegram_actions_external_message_id_key/);
+  assert.doesNotMatch(repository, /operationalInteraction\.create\(\{ data: \{ \.\.\.input/);
 });
 
 test("structured reports bypass both classifier and extractor", async () => {
@@ -119,7 +133,7 @@ function graphFixture(classifier: OperationalDependencies["classifier"] = async 
     acceptReport: async (input: { expectedRevision: number }) => input.expectedRevision !== revision ? null : (writes++, revision++, pendingStatus = "APPROVED", { report: {}, impact: { level: "NONE", reasons: [], replanSupported: false }, pending: { ...pending, status: pendingStatus, preview: (pending as { preview: unknown }).preview } }),
     resolvePending: async (input: { status: string }) => ({ ...pending, status: pendingStatus = input.status, preview: (pending as { preview: unknown }).preview }),
   } as unknown as TunasRepository;
-  const graph = buildOperationalGraph({ repository, missions: {} as MissionService, classifier, reportExtractor: async () => null }, new MemorySaver());
+  const graph = buildOperationalGraph({ repository, missions: {} as MissionService, classifier, reportExtractor: async (message) => /note|covered/i.test(message) ? { report: { reportType: "GENERAL_OPERATIONAL_NOTE", observedAt: updatedAt.toISOString(), payload: { text: message } }, clarification: null } : { report: null, clarification: "Apa yang ingin Anda laporkan?" } }, new MemorySaver());
   return { graph, values: () => ({ revision, pendingStatus, writes }), stale: () => revision++ };
 }
 

@@ -100,6 +100,8 @@ model TelegramAction {
   farmId               String             @map("farm_id") @db.Uuid
   missionId            String             @map("mission_id") @db.Uuid
   action                String             @db.Text
+  payload               Json?              @db.JsonB
+  externalMessageId     String?            @unique @map("external_message_id") @db.Text
   tokenHash             String             @unique @map("token_hash") @db.Text
   telegramMessageId     String?            @map("telegram_message_id") @db.Text
   expiresAt             DateTime           @map("expires_at") @db.Timestamptz(6)

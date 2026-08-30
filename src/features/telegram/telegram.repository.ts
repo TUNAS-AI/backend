@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { Prisma } from "../../generated/prisma/client";
 import { getPrisma } from "../../infrastructure/prisma";
 
 export const telegramToken = () => randomBytes(24).toString("base64url");
@@ -11,6 +12,14 @@ export class TelegramRepository {
 
   identity(telegramUserId: string, telegramChatId: string) {
     return getPrisma().telegramConnection.findFirst({ where: { telegramUserId, telegramChatId } });
+  }
+
+  openOperationalPending(ownerId: string) {
+    return getPrisma().pendingAction.findFirst({ where: { status: "PENDING", farm: { ownerId }, thread: { channel: "telegram" } }, orderBy: { createdAt: "desc" } });
+  }
+
+  openReplanClarification(ownerId: string) {
+    return getPrisma().telegramAction.findFirst({ where: { action: "REPLAN_CLARIFICATION", consumedAt: null, expiresAt: { gt: new Date() }, farm: { ownerId } }, orderBy: { createdAt: "desc" } });
   }
 
   async createLink(userId: string, tokenHash: string, expiresAt: Date) {
@@ -42,12 +51,27 @@ export class TelegramRepository {
     });
   }
 
-  async createAction(input: { telegramConnectionId: string; farmId: string; missionId: string; tokenHash: string; expiresAt: Date }) {
-    return getPrisma().telegramAction.create({ data: { ...input, action: "MOCK_REPLAN" } });
+  ownerCurrentMission(ownerId: string) {
+    return getPrisma().mission.findFirst({ where: { status: "ACTIVE", farm: { ownerId } }, include: { constraints: true, missionSteps: { orderBy: { sequence: "asc" } } }, orderBy: { updatedAt: "desc" } });
+  }
+
+  async createAction(input: { telegramConnectionId: string; farmId: string; missionId: string; action: string; tokenHash: string; expiresAt: Date; payload?: unknown; externalMessageId?: string }) {
+    const data = { ...input, payload: input.payload as Prisma.InputJsonValue | undefined };
+    return input.externalMessageId
+      ? getPrisma().telegramAction.upsert({ where: { externalMessageId: input.externalMessageId }, create: data, update: {} })
+      : getPrisma().telegramAction.create({ data });
   }
 
   async bindActionMessage(telegramActionId: string, telegramMessageId: string) {
     await getPrisma().telegramAction.update({ where: { telegramActionId }, data: { telegramMessageId } });
+  }
+
+  async updateActionPayload(telegramActionId: string, payload: unknown) {
+    return getPrisma().telegramAction.update({ where: { telegramActionId }, data: { payload: payload as Prisma.InputJsonValue } });
+  }
+
+  async resolveAction(telegramActionId: string) {
+    await getPrisma().telegramAction.updateMany({ where: { telegramActionId, consumedAt: null }, data: { consumedAt: new Date() } });
   }
 
   async deleteAction(telegramActionId: string) {
@@ -60,5 +84,9 @@ export class TelegramRepository {
 
   async consumeAction(telegramActionId: string, now: Date) {
     return (await getPrisma().telegramAction.updateMany({ where: { telegramActionId, consumedAt: null, expiresAt: { gt: now } }, data: { consumedAt: now } })).count === 1;
+  }
+
+  async releaseAction(telegramActionId: string, consumedAt: Date) {
+    await getPrisma().telegramAction.updateMany({ where: { telegramActionId, consumedAt }, data: { consumedAt: null } });
   }
 }
