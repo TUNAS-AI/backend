@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Prisma } from "../../generated/prisma/client";
 import { traceAgentOperation } from "../../agent/tracing";
 import { ApiError } from "../../shared/api-error";
@@ -8,13 +8,13 @@ import { getOpenMeteoForecast } from "../../agent/missions/open-meteo.client";
 import { signPreview, verifyPreview } from "./mission-preview-token";
 import { MissionRepository } from "./mission.repository";
 import { GoogleCalendarService } from "../google-calendar/google-calendar.service";
+import { generateFeasiblePlans, validatePlan } from "./deterministic-planner";
 import type { FactBlock, MessageInput, MissionCandidate, MissionCloseoutInput, MissionFact, MissionRecord, MissionStage, MissionStatus, MissionStepStatus } from "./mission.types";
 
 const stages: Record<Exclude<MissionStage, "COMPLETED">, Exclude<MissionStage, "WAITING" | "COMPLETED"> | undefined> = { WAITING: "HARVESTING", HARVESTING: "DRYING", DRYING: "FINISHED", FINISHED: "TO_REVIEW", TO_REVIEW: undefined };
 export const nextMissionStage = (stage: string) => stages[stage as keyof typeof stages];
 type StoredStep = { missionStepId: string; sequence: number; stage: "HARVESTING" | "DRYING"; status: MissionStepStatus };
-type ReplanStage = "WAITING" | "HARVESTING" | "DRYING";
-type ReplanPreviewPayload = { exp: number; kind: "replan"; farmId: string; missionId: string; expectedPlanId: string | null; messageCount: number; candidate: MissionCandidate; weather: unknown; plans: import("./mission.types").GeneratedPlan[]; traceId?: string };
+type ReplanPreviewPayload = { exp: number; kind: "replan"; farmId: string; missionId: string; expectedPlanId: string | null; expectedUpdatedAt: string; messageCount: number; stateHash: string; candidate: MissionCandidate; plans: import("./mission.types").GeneratedPlan[]; traceId?: string };
 
 export function canAdvanceMissionStage(stage: string, steps: StoredStep[]) {
   if (stage === "WAITING") return true;
@@ -45,7 +45,7 @@ export function logInterpretationFailure(previewId: string, error: unknown) {
   const kind = error instanceof MissionInterpretationOutputError || /failed to parse|output_parsing_failure|output failed validation/i.test(message) ? "output_parsing_failure" : "provider_failure";
   console.warn("Mission interpretation failed", { previewId, kind });
 }
-const required = ["fieldBlockId", "cropBatchIds", "marketQuality", "plannedHarvestKg", "plannedDriedKg", "deadline"] as const;
+const required = ["fieldBlockId", "cropBatchIds", "marketQuality", "plannedHarvestKg", "plannedDriedKg", "deadline", "harvestDurationHours", "rainProtectionAvailable"] as const;
 const factKeys = ["fieldBlock", "cropBatch", "marketQuality", "deadline", "plannedHarvestKg", "plannedDriedKg"] as const;
 type HistoricalOutcome = { mission: { fieldBlockId: string | null }; plannedHarvestKg: unknown; plannedDriedKg: unknown; actualHarvestKg: unknown; actualDriedKg: unknown; harvestedAreaHectares: unknown; dryingCompleted: unknown; rejectedKg: unknown; notes: unknown };
 
@@ -62,6 +62,18 @@ function planningContext(context: Awaited<ReturnType<MissionRepository["context"
   const { history, ...farmContext } = context;
   return { candidate, context: farmContext, completedMissionHistory: completedFieldHistory(history, candidate.facts.fieldBlockId as string) };
 }
+function canonical(value: unknown): unknown {
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, canonical(item)]));
+  return typeof value === "bigint" ? value.toString() : value;
+}
+function authoritativeStateHash(context: Awaited<ReturnType<MissionRepository["context"]>>, candidate: MissionCandidate, mission?: MissionRecord) {
+  const field = context.fields.find((item) => item.fieldBlockId === candidate.facts.fieldBlockId);
+  const batches = context.cropBatches.filter((item) => candidate.facts.cropBatchIds.includes(item.cropBatchId));
+  const state = { farm: { timezone: context.farm.timezone, defaultWorkingHours: context.farm.defaultWorkingHours }, field, batches, facts: candidate.facts, mission: mission ? { approvedPlanId: mission.approvedPlanId, updatedAt: mission.updatedAt, stage: mission.stage, steps: mission.missionSteps } : null };
+  return createHash("sha256").update(JSON.stringify(canonical(state))).digest("hex");
+}
 function interpretationContext(context: Awaited<ReturnType<MissionRepository["context"]>>, messages: MessageInput[], existingFacts?: MissionFact) {
   return {
     farmer: { displayName: context.farm.owner.displayName, locale: context.farm.owner.locale, timezone: context.farm.owner.timezone },
@@ -75,7 +87,7 @@ function interpretationContext(context: Awaited<ReturnType<MissionRepository["co
 }
 function confidence(value: unknown): "low" | "high" { return value === null || value === "" || (Array.isArray(value) && !value.length) ? "low" : "high"; }
 function review(facts: MissionFact) {
-  const keys = ["fieldBlockId", "cropBatchIds", "marketQuality", "plannedHarvestKg", "plannedDriedKg", "deadline", "availableWorkerCount", "coveredDryingCapacityKg", "notes"] as const;
+    const keys = ["fieldBlockId", "cropBatchIds", "marketQuality", "plannedHarvestKg", "plannedDriedKg", "deadline", "harvestDurationHours", "estimatedHarvestableKg", "rainProtectionAvailable", "availableWorkerCount", "coveredDryingCapacityKg", "notes"] as const;
   return keys.map((key) => ({ key, status: confidence(facts[key]) === "high" ? "confirmed" as const : "missing" as const, reason: confidence(facts[key]) === "high" ? "Ready for planning." : required.includes(key as typeof required[number]) ? "This detail is needed before planning." : "Optional; add it if it affects the work.", provenance: "FARMER_REPORTED" as const, confidence: confidence(facts[key]) }));
 }
 function blocks(facts: MissionFact): FactBlock[] {
@@ -86,6 +98,9 @@ function blocks(facts: MissionFact): FactBlock[] {
     { key: "deadline", value: facts.deadline, provenance: "FARMER_REPORTED", confidence: confidence(facts.deadline) },
     { key: "plannedHarvestKg", value: facts.plannedHarvestKg, provenance: "FARMER_REPORTED", confidence: confidence(facts.plannedHarvestKg) },
     { key: "plannedDriedKg", value: facts.plannedDriedKg, provenance: "FARMER_REPORTED", confidence: confidence(facts.plannedDriedKg) },
+    { key: "harvestDurationHours", value: facts.harvestDurationHours, provenance: "FARMER_REPORTED", confidence: confidence(facts.harvestDurationHours) },
+    { key: "estimatedHarvestableKg", value: facts.estimatedHarvestableKg, provenance: "FARMER_REPORTED", confidence: confidence(facts.estimatedHarvestableKg) },
+    { key: "rainProtectionAvailable", value: facts.rainProtectionAvailable, provenance: "FARMER_REPORTED", confidence: facts.rainProtectionAvailable === null ? "low" : "high" },
     { key: "availableWorkerCount", value: facts.availableWorkerCount, provenance: "FARMER_REPORTED", confidence: confidence(facts.availableWorkerCount) },
     { key: "coveredDryingCapacityKg", value: facts.coveredDryingCapacityKg, provenance: "FARMER_REPORTED", confidence: confidence(facts.coveredDryingCapacityKg) },
   ];
@@ -122,6 +137,9 @@ export class MissionService {
       plannedHarvestKg: typeof plannedHarvestKg === "number" ? plannedHarvestKg : null,
       plannedDriedKg: typeof plannedDriedKg === "number" ? plannedDriedKg : null,
       deadline: typeof deadline === "string" ? deadline : null,
+      harvestDurationHours: typeof value("harvestDurationHours") === "number" ? value("harvestDurationHours") as number : null,
+      estimatedHarvestableKg: typeof value("estimatedHarvestableKg") === "number" ? value("estimatedHarvestableKg") as number : null,
+      rainProtectionAvailable: typeof value("rainProtectionAvailable") === "boolean" ? value("rainProtectionAvailable") as boolean : null,
       availableWorkerCount: typeof availableWorkerCount === "number" ? availableWorkerCount : null,
       coveredDryingCapacityKg: typeof coveredDryingCapacityKg === "number" ? coveredDryingCapacityKg : null,
       notes: typeof mission.notes === "string" ? mission.notes : null,
@@ -182,7 +200,7 @@ export class MissionService {
   }
 
   private requireComplete(candidate: MissionCandidate) {
-    if (candidate.review.some((item) => item.status !== "confirmed" && !["notes", "availableWorkerCount", "coveredDryingCapacityKg"].includes(item.key))) throw new ApiError(409, "Review every required mission detail before planning");
+    if (candidate.review.some((item) => item.status !== "confirmed" && !["notes", "estimatedHarvestableKg", "availableWorkerCount", "coveredDryingCapacityKg"].includes(item.key))) throw new ApiError(409, "Review every required mission detail before planning");
     for (const key of required) {
       const value = candidate.facts[key];
       if (value === null || value === undefined || (Array.isArray(value) && !value.length)) throw new ApiError(409, `${key} must be clarified before planning`);
@@ -196,16 +214,21 @@ export class MissionService {
     if (!field) throw new ApiError(409, "Selected field must belong to this farm");
     const missionId = randomUUID();
     const weather = await this.weatherForecast(Number(field.latitude), Number(field.longitude), context.farm.timezone);
-    let generatedPlans: import("./mission.types").GeneratedPlan[];
+    const generated = generateFeasiblePlans({ facts: candidate.facts, timezone: context.farm.timezone, workingHours: context.farm.defaultWorkingHours, weather });
+    if (!generated.plans.length) return { status: "infeasible" as const, missionId, blockers: [generated.infeasibility?.reason ?? "No feasible plan exists for the confirmed constraints."] };
+    const identified = generated.plans.map((plan) => ({ ...plan, planId: randomUUID() }));
+    let plans: import("./mission.types").GeneratedPlan[];
+    let recommendationReason: string;
     try {
-      generatedPlans = await traceAgentOperation("mission-planning-preview", () => this.agent.plan(planningContext(context, candidate), weather, context.farm.timezone, missionId), { farmId, missionId, previewId: candidate.previewId, thread_id: candidate.previewId }, missionId)();
+      const ranking = await traceAgentOperation("mission-planning-preview", () => this.agent.rank(identified.map((plan) => ({ candidateId: plan.planId as string, summary: plan.summary, risks: plan.risks })), planningContext(context, candidate), missionId), { farmId, missionId, previewId: candidate.previewId, thread_id: candidate.previewId }, missionId)();
+      plans = ranking.map((rank, index) => ({ ...identified.find((plan) => plan.planId === rank.candidateId)!, recommended: index === 0 }));
+      recommendationReason = ranking[0].reason;
     } catch (error) {
       logPlanningFailure(missionId, error);
       throw planningUnavailable(error);
     }
-    const plans = generatedPlans.map((plan) => ({ ...plan, planId: randomUUID() }));
-    const token = signPreview({ farmId, missionId, candidate, weather, plans, traceId: missionId });
-    return { missionId, plans, previewToken: token, expiresInSeconds: 1800 };
+    const token = signPreview({ farmId, missionId, stateHash: authoritativeStateHash(context, candidate), candidate, plans, traceId: missionId });
+    return { status: "feasible" as const, missionId, candidates: plans, recommendation: { planId: plans[0].planId!, reasons: [recommendationReason] }, previewToken: token, expiresInSeconds: 1800 };
   }
 
   async replanPreview(ownerId: string, missionId: string, candidate: MissionCandidate) {
@@ -214,18 +237,24 @@ export class MissionService {
     const field = context.fields.find((item) => item.fieldBlockId === candidate.facts.fieldBlockId);
     if (!field) throw new ApiError(409, "Selected field must belong to this farm");
     const traceId = randomUUID(); const weather = await this.weatherForecast(Number(field.latitude), Number(field.longitude), context.farm.timezone);
-    let generatedPlans: import("./mission.types").GeneratedPlan[];
+    const completedSteps = (mission.missionSteps as Array<never>).filter((step: { status?: string }) => step.status === "COMPLETED");
+    const generated = generateFeasiblePlans({ facts: candidate.facts, timezone: context.farm.timezone, workingHours: context.farm.defaultWorkingHours, weather, completedSteps });
+    if (!generated.plans.length) return { status: "infeasible" as const, missionId, blockers: [generated.infeasibility?.reason ?? "No feasible replan exists for the confirmed constraints."] };
+    const identified = generated.plans.map((plan) => ({ ...plan, planId: randomUUID() }));
+    let plans: import("./mission.types").GeneratedPlan[];
+    let recommendationReason: string;
     try {
-      generatedPlans = await traceAgentOperation("mission-replanning-preview", () => this.agent.plan(planningContext(context, candidate), weather, context.farm.timezone, traceId), { farmId, missionId, previewId: candidate.previewId, thread_id: candidate.previewId }, traceId)();
+      const ranking = await traceAgentOperation("mission-replanning-preview", () => this.agent.rank(identified.map((plan) => ({ candidateId: plan.planId as string, summary: plan.summary, risks: plan.risks })), planningContext(context, candidate), traceId), { farmId, missionId, previewId: candidate.previewId, thread_id: candidate.previewId }, traceId)();
+      plans = ranking.map((rank, index) => ({ ...identified.find((plan) => plan.planId === rank.candidateId)!, recommended: index === 0 }));
+      recommendationReason = ranking[0].reason;
     } catch (error) { logPlanningFailure(missionId, error); throw planningUnavailable(error); }
-    const plans = generatedPlans.map((plan) => ({ ...plan, planId: randomUUID() }));
     const messageCount = Array.isArray(mission.messages) ? mission.messages.length : 0;
-    const token = signPreview({ kind: "replan", farmId, missionId, expectedPlanId: typeof mission.approvedPlanId === "string" ? mission.approvedPlanId : null, messageCount, candidate, weather, plans, traceId });
-    return { missionId, plans, previewToken: token, expiresInSeconds: 1800 };
+    const token = signPreview({ kind: "replan", farmId, missionId, expectedPlanId: typeof mission.approvedPlanId === "string" ? mission.approvedPlanId : null, expectedUpdatedAt: String(mission.updatedAt), messageCount, stateHash: authoritativeStateHash(context, candidate, mission), candidate, plans, traceId });
+    return { status: "feasible" as const, missionId, candidates: plans, recommendation: { planId: plans[0].planId!, reasons: [recommendationReason] }, previewToken: token, expiresInSeconds: 1800 };
   }
 
   async confirm(ownerId: string, previewToken: string, planId: string) {
-    const payload = verifyPreview<{ exp: number; farmId: string; missionId: string; candidate: MissionCandidate; weather: unknown; plans: import("./mission.types").GeneratedPlan[]; traceId?: string }>(previewToken);
+    const payload = verifyPreview<{ exp: number; farmId: string; missionId: string; stateHash: string; candidate: MissionCandidate; plans: import("./mission.types").GeneratedPlan[]; traceId?: string }>(previewToken);
     const farmId = await this.farmIdForOwner(ownerId); if (payload.farmId !== farmId) throw new ApiError(409, "Mission preview belongs to another farm");
     const existing = await this.repository.find(farmId, payload.missionId);
     if (existing) return existing;
@@ -233,27 +262,37 @@ export class MissionService {
     const context = await this.repository.context(farmId, payload.candidate.facts.fieldBlockId); this.validateFacts(payload.candidate.facts, context);
     const plan = payload.plans.find((item) => item.planId === planId);
     if (!plan) throw new ApiError(409, "Selected plan is not in this preview");
+    if (payload.stateHash !== authoritativeStateHash(context, payload.candidate)) throw new ApiError(409, "Farm state changed while you were reviewing plans. Plan again.", "PREVIEW_STALE");
+    const field = context.fields.find((item) => item.fieldBlockId === payload.candidate.facts.fieldBlockId)!;
+    const weather = await this.weatherForecast(Number(field.latitude), Number(field.longitude), context.farm.timezone);
+    if (!validatePlan(plan, { facts: payload.candidate.facts, timezone: context.farm.timezone, workingHours: context.farm.defaultWorkingHours, weather })) throw new ApiError(409, "The selected plan is no longer feasible with current weather or farm state. Plan again.", "PREVIEW_STALE");
     const original = payload.candidate.messages.find((message) => message.role === "farmer")?.content;
     if (!original) throw new ApiError(409, "Mission preview is missing the original request");
-    const mission = await this.repository.createConfirmed({ missionId: payload.missionId, farmId, originalMessage: original, messages: payload.candidate.messages, facts: payload.candidate.facts, blocks: payload.candidate.blocks, plan, weather: payload.weather as Prisma.InputJsonValue, traceId: payload.traceId });
+    const mission = await this.repository.createConfirmed({ missionId: payload.missionId, farmId, originalMessage: original, messages: payload.candidate.messages, facts: payload.candidate.facts, blocks: payload.candidate.blocks, plan, weather: weather as Prisma.InputJsonValue, traceId: payload.traceId });
     try { await this.calendarSync.syncIfConnected(farmId); } catch { console.warn("Google Calendar sync failed", { missionId: payload.missionId }); }
     return mission;
   }
 
-  async confirmReplan(ownerId: string, missionId: string, input: { previewToken: string; planId: string; stage: ReplanStage }) {
+  async confirmReplan(ownerId: string, missionId: string, input: { previewToken: string; planId: string }) {
     const payload = verifyPreview<ReplanPreviewPayload>(input.previewToken);
     const farmId = await this.farmIdForOwner(ownerId);
     if (payload.kind !== "replan" || payload.farmId !== farmId || payload.missionId !== missionId) throw new ApiError(409, "Mission preview belongs to another mission");
     this.requireComplete(payload.candidate);
+    const mission = this.requireActive(await this.get(ownerId, missionId));
     const context = await this.repository.context(farmId, payload.candidate.facts.fieldBlockId); this.validateFacts(payload.candidate.facts, context);
     const plan = payload.plans.find((item) => item.planId === input.planId);
     if (!plan) throw new ApiError(409, "Selected plan is not in this preview");
+    if (payload.stateHash !== authoritativeStateHash(context, payload.candidate, mission)) throw new ApiError(409, "This mission or farm state changed while you were reviewing plans. Plan again.", "PREVIEW_STALE");
+    const field = context.fields.find((item) => item.fieldBlockId === payload.candidate.facts.fieldBlockId)!;
+    const weather = await this.weatherForecast(Number(field.latitude), Number(field.longitude), context.farm.timezone);
+    const completedSteps = (mission.missionSteps as Array<never>).filter((step: { status?: string }) => step.status === "COMPLETED");
+    if (!validatePlan(plan, { facts: payload.candidate.facts, timezone: context.farm.timezone, workingHours: context.farm.defaultWorkingHours, weather, completedSteps })) throw new ApiError(409, "The selected plan is no longer feasible with current weather or mission state. Plan again.", "PREVIEW_STALE");
     try {
-      const mission = await this.repository.replaceConfirmedPlan({ missionId, farmId, expectedPlanId: payload.expectedPlanId, stage: input.stage, messages: payload.candidate.messages.slice(payload.messageCount), facts: payload.candidate.facts, blocks: payload.candidate.blocks, plan, weather: payload.weather as Prisma.InputJsonValue, traceId: payload.traceId });
+      const mission = await this.repository.replaceConfirmedPlan({ missionId, farmId, expectedPlanId: payload.expectedPlanId, expectedUpdatedAt: new Date(payload.expectedUpdatedAt), messages: payload.candidate.messages.slice(payload.messageCount), facts: payload.candidate.facts, blocks: payload.candidate.blocks, plan, weather: weather as Prisma.InputJsonValue, traceId: payload.traceId });
       try { await this.calendarSync.syncIfConnected(farmId); } catch { console.warn("Google Calendar sync failed", { missionId }); }
       return mission;
     } catch (error) {
-      if (error instanceof Error && error.message === "stale-mission") throw new ApiError(409, "This mission changed while you were reviewing plans. Refresh and try again.");
+      if (error instanceof Error && error.message === "stale-mission") throw new ApiError(409, "This mission changed while you were reviewing plans. Refresh and try again.", "PREVIEW_STALE");
       throw error;
     }
   }

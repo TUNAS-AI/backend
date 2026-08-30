@@ -46,31 +46,24 @@ test("fills legacy missing harvest allocations without replacing supplied amount
   assert.doesNotThrow(() => validateGeneratedPlans(plans, "Asia/Jakarta", 50));
 });
 
-test("instructs the planner to return three options and extend drying for rain", async () => {
-  const plan = { name: "Early harvest", summary: "Harvest", recommended: true, assumptions: ["Rain adds a day"], risks: { rain: "Drying is delayed" }, dryingEstimateDays: 5, dryingEstimateReason: "Rain adds drying time.", activities: [{ title: "Harvest", description: "Pick", scheduleType: "DAILY_WINDOW" as const, startsOn: "2026-07-15", endsOn: "2026-07-15", windowStart: "08:00", windowEnd: "10:00", timezone: "Asia/Jakarta", isConditional: false, stage: "HARVESTING" as const, targetHarvestKg: 50 }, { title: "Dry", description: "Dry", scheduleType: "DATE_RANGE" as const, startsOn: "2026-07-15", endsOn: "2026-07-20", windowStart: null, windowEnd: null, timezone: "Asia/Jakarta", isConditional: true, stage: "DRYING" as const, targetHarvestKg: null }] };
+test("allows Gemini to rank only supplied deterministic candidate IDs", async () => {
+  const ids = ["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"];
   let prompt = "";
-  const agent = new MissionAgent(() => ({ withStructuredOutput: () => ({ invoke: async (value: Array<{ content: unknown }>) => { prompt = value.map((message) => String(message.content)).join("\n"); return { plans: [plan, { ...plan, name: "Before rain", recommended: false }, { ...plan, name: "After rain", recommended: false }] }; } }) }) as never);
-  await agent.plan({ candidate: { facts: { deadline: "2026-07-18T16:59:59.999Z", plannedHarvestKg: 50 } } }, { timezone: "Asia/Jakarta", hourly: { time: ["2026-07-15T00:00"], precipitation_probability: [90], precipitation: [8], wind_speed: [5] } }, "Asia/Jakarta");
-  assert.match(prompt, /exactly three meaningful, distinct/);
-  assert.match(prompt, /exactly one marked recommended/);
-  assert.match(prompt, /Forecast rain must directly extend the drying estimate and the DRYING date range/);
-  assert.match(prompt, /rain-adjusted deadline/);
-  assert.match(prompt, /never stop at an initial batch/);
-  assert.match(prompt, /Completed field closeouts are historical observations/);
-  assert.match(prompt, /at least two completed outcomes/);
-  assert.match(prompt, /Completed closeouts from the selected field/);
-  assert.match(prompt, /Hijau AI backend agent/);
+  const agent = new MissionAgent(() => ({ withStructuredOutput: () => ({ invoke: async (value: Array<{ content: unknown }>) => { prompt = value.map((message) => String(message.content)).join("\n"); return { ranking: ids.map((candidateId) => ({ candidateId, reason: "Lower precipitation risk." })) }; } }) }) as never);
+  assert.equal((await agent.rank(ids.map((candidateId) => ({ candidateId, summary: "Server schedule", risks: {} })), {}))[0].candidateId, ids[0]);
+  assert.match(prompt, /Never return, alter, or invent schedule content/);
+  assert.match(prompt, /Precipitation probability is ranking risk only/);
 });
 
 test("logs the raw planner response through the shared runtime when debugging is enabled", async () => {
-  const plan = { name: "Early harvest", summary: "Harvest", recommended: true, assumptions: [], risks: {}, dryingEstimateDays: 4, dryingEstimateReason: "Dry", activities: [{ title: "Harvest", description: "Pick", scheduleType: "DAILY_WINDOW" as const, startsOn: "2026-07-15", endsOn: "2026-07-15", windowStart: "08:00", windowEnd: "10:00", timezone: "Asia/Jakarta", isConditional: false, stage: "HARVESTING" as const, targetHarvestKg: 50 }, { title: "Dry", description: "Dry", scheduleType: "DATE_RANGE" as const, startsOn: "2026-07-15", endsOn: "2026-07-19", windowStart: null, windowEnd: null, timezone: "Asia/Jakarta", isConditional: false, stage: "DRYING" as const, targetHarvestKg: null }] };
+  const candidateId = "00000000-0000-4000-8000-000000000001";
   const previousDebug = env.agentDebugRawOutput; const previousInfo = console.info; const previousDir = console.dir; const calls: unknown[][] = [];
   env.agentDebugRawOutput = true;
   console.info = (...args: unknown[]) => { calls.push(args); };
   console.dir = (...args: unknown[]) => { calls.push(args); };
   try {
-    const agent = new MissionAgent(() => ({ withStructuredOutput: (_schema: unknown, options: { includeRaw?: boolean }) => ({ invoke: async () => { assert.equal(options.includeRaw, true); return { raw: { content: '{"provider":"raw"}' }, parsed: { plans: [plan, { ...plan, name: "Before rain", recommended: false }, { ...plan, name: "After rain", recommended: false }] } }; } }) }) as never);
-    await agent.plan({}, {}, "Asia/Jakarta", "mission-raw");
+    const agent = new MissionAgent(() => ({ withStructuredOutput: (_schema: unknown, options: { includeRaw?: boolean }) => ({ invoke: async () => { assert.equal(options.includeRaw, true); return { raw: { content: '{"provider":"raw"}' }, parsed: { ranking: [{ candidateId, reason: "Best" }] } }; } }) }) as never);
+    await agent.rank([{ candidateId, summary: "Server schedule", risks: {} }], {}, "mission-raw");
   } finally {
     env.agentDebugRawOutput = previousDebug;
     console.info = previousInfo;
@@ -93,7 +86,7 @@ test("normalizes common relative mission deadlines against the farm timezone", (
 });
 
 test("runs caller-scoped interpretation through the bounded workflow", async () => {
-  const response = { fieldBlockId: null, cropBatchIds: [], marketQuality: null, plannedHarvestKg: null, plannedDriedKg: null, deadline: null, availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: { key: "field", question: "Which field?" } };
+  const response = { fieldBlockId: null, cropBatchIds: [], marketQuality: null, plannedHarvestKg: null, plannedDriedKg: null, deadline: null, harvestDurationHours: null, estimatedHarvestableKg: null, rainProtectionAvailable: null, availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: { key: "field", question: "Which field?" } };
   const agent = new MissionAgent(() => ({ withStructuredOutput: () => ({ invoke: async () => response }) }) as never);
   const result = await agent.interpret("Help me harvest", { fields: [] });
   assert.equal(result.facts.clarification?.key, "field");
@@ -103,7 +96,7 @@ test("runs caller-scoped interpretation through the bounded workflow", async () 
 });
 
 test("gives interpretation a structured mission input and requires JSON only", async () => {
-  const response = { fieldBlockId: null, cropBatchIds: [], marketQuality: null, plannedHarvestKg: null, plannedDriedKg: null, deadline: null, availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: { key: "fieldBlockId", question: "Which field should be harvested?" } };
+  const response = { fieldBlockId: null, cropBatchIds: [], marketQuality: null, plannedHarvestKg: null, plannedDriedKg: null, deadline: null, harvestDurationHours: null, estimatedHarvestableKg: null, rainProtectionAvailable: null, availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: { key: "fieldBlockId", question: "Which field should be harvested?" } };
   let prompt = "";
   const agent = new MissionAgent(() => ({ withStructuredOutput: () => ({ invoke: async (value: Array<{ content: unknown }>) => { prompt = value.map((message) => String(message.content)).join("\n"); return response; } }) }) as never, () => new Date("2026-07-16T03:00:00.000Z"));
   await agent.interpret("Harvest the north field", { farmer: { displayName: "Ayu" }, farm: { timezone: "Asia/Jakarta" }, fields: [{ fieldBlockId: "field-1", name: "North" }], cropBatches: [{ cropBatchId: "batch-1", fieldBlockId: "field-1" }], completedMissionHistory: [], conversation: [{ role: "farmer", content: "Harvest the north field" }], existingFacts: null });
@@ -135,15 +128,15 @@ test("prints raw output with the agent name and run ID only when debugging is en
 });
 
 test("marks complete required facts ready for planning", async () => {
-  const response = { fieldBlockId: "00000000-0000-4000-8000-000000000001", cropBatchIds: ["00000000-0000-4000-8000-000000000002"], marketQuality: "Grade A", plannedHarvestKg: 50, plannedDriedKg: 35, deadline: "2026-07-20T08:00:00.000Z", availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: null };
+  const response = { fieldBlockId: "00000000-0000-4000-8000-000000000001", cropBatchIds: ["00000000-0000-4000-8000-000000000002"], marketQuality: "Grade A", plannedHarvestKg: 50, plannedDriedKg: 35, deadline: "2026-07-20T08:00:00.000Z", harvestDurationHours: 4, estimatedHarvestableKg: 50, rainProtectionAvailable: true, availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: null };
   const agent = new MissionAgent(() => ({ withStructuredOutput: () => ({ invoke: async () => response }) }) as never);
   const result = await agent.interpret("Harvest when ready", {});
-  assert.ok(result.review.filter((item) => !["notes", "availableWorkerCount", "coveredDryingCapacityKg"].includes(item.key)).every((item) => item.status === "confirmed"));
+  assert.ok(result.review.filter((item) => !["notes", "estimatedHarvestableKg", "availableWorkerCount", "coveredDryingCapacityKg"].includes(item.key)).every((item) => item.status === "confirmed"));
 });
 
 test("rejects an empty structured planner response", async () => {
   const agent = new MissionAgent(() => ({ withStructuredOutput: () => ({ invoke: async () => "" }) }) as never);
-  await assert.rejects(() => agent.plan({}, {}, "Asia/Jakarta"));
+  await assert.rejects(() => agent.rank([{ candidateId: "00000000-0000-4000-8000-000000000001", summary: "Server schedule", risks: {} }], {}));
 });
 
 test("rejects invalid structured interpretation output", async () => {

@@ -12,7 +12,7 @@ const listDetails = {
 } as const;
 
 export function planCreateData(missionId: string, planningRunId: string, plan: GeneratedPlan) {
-  const { activities, assumptions, risks, planId: _previewPlanId, ...details } = plan;
+  const { activities, assumptions, risks, evidence: _evidence, tradeoffs: _tradeoffs, planId: _previewPlanId, ...details } = plan;
   return { missionId, planningRunId, ...details, assumptions: assumptions as Prisma.InputJsonValue, risks: risks as Prisma.InputJsonValue, steps: { create: activities.map((activity, sequence) => ({ sequence: sequence + 1, title: activity.title, description: activity.description, scheduleType: activity.scheduleType, startsOn: new Date(`${activity.startsOn}T00:00:00.000Z`), endsOn: new Date(`${activity.endsOn}T00:00:00.000Z`), windowStart: activity.windowStart, windowEnd: activity.windowEnd, timezone: activity.timezone, isConditional: activity.isConditional, stage: activity.stage, targetHarvestKg: activity.targetHarvestKg ?? null })) } };
 }
 
@@ -52,10 +52,13 @@ export class MissionRepository {
     return record(await prisma.mission.findUniqueOrThrow({ where: { missionId }, include: details }));
   }
 
-  async replaceConfirmedPlan(input: { missionId: string; farmId: string; expectedPlanId: string | null; stage: "WAITING" | "HARVESTING" | "DRYING"; messages: MessageInput[]; facts: MissionFact; blocks: FactBlock[]; plan: GeneratedPlan; weather: Prisma.InputJsonValue; traceId?: string | null }) {
+  async replaceConfirmedPlan(input: { missionId: string; farmId: string; expectedPlanId: string | null; expectedUpdatedAt: Date; messages: MessageInput[]; facts: MissionFact; blocks: FactBlock[]; plan: GeneratedPlan; weather: Prisma.InputJsonValue; traceId?: string | null }) {
     const prisma = getPrisma();
     await prisma.$transaction(async (tx) => {
-      const changed = await tx.mission.updateMany({ where: { missionId: input.missionId, farmId: input.farmId, status: "ACTIVE", approvedPlanId: input.expectedPlanId }, data: { stage: input.stage } });
+      const existingSteps = await tx.missionStep.findMany({ where: { missionId: input.missionId }, orderBy: { sequence: "asc" } });
+      const completed = existingSteps.filter((step) => step.status === "COMPLETED");
+      const stage = completed.some((step) => step.stage === "DRYING") ? "FINISHED" : completed.some((step) => step.stage === "HARVESTING") ? "DRYING" : "WAITING";
+      const changed = await tx.mission.updateMany({ where: { missionId: input.missionId, farmId: input.farmId, status: "ACTIVE", approvedPlanId: input.expectedPlanId, updatedAt: input.expectedUpdatedAt }, data: { stage } });
       if (!changed.count) throw new Error("stale-mission");
       await tx.mission.update({ where: { missionId: input.missionId }, data: {
         fieldBlockId: input.facts.fieldBlockId, notes: input.facts.notes,
@@ -65,8 +68,8 @@ export class MissionRepository {
       } });
       const run = await tx.planningRun.create({ data: { missionId: input.missionId, status: "SUCCEEDED", traceId: input.traceId ?? null, completedAt: new Date() } });
       const plan = await tx.plan.create({ data: planCreateData(input.missionId, run.planningRunId, input.plan), include: { steps: { orderBy: { sequence: "asc" } } } });
-      await tx.missionStep.deleteMany({ where: { missionId: input.missionId } });
-      await tx.missionStep.createMany({ data: plan.steps.map((step) => ({ missionId: input.missionId, sourcePlanStepId: step.planStepId, sequence: step.sequence, title: step.title, description: step.description, scheduleType: step.scheduleType, startsOn: step.startsOn, endsOn: step.endsOn, windowStart: step.windowStart, windowEnd: step.windowEnd, timezone: step.timezone, isConditional: step.isConditional, stage: step.stage, targetHarvestKg: step.targetHarvestKg })) });
+      await tx.missionStep.deleteMany({ where: { missionId: input.missionId, status: { not: "COMPLETED" } } });
+      await tx.missionStep.createMany({ data: plan.steps.map((step, index) => ({ missionId: input.missionId, sourcePlanStepId: step.planStepId, sequence: completed.length + index + 1, title: step.title, description: step.description, scheduleType: step.scheduleType, startsOn: step.startsOn, endsOn: step.endsOn, windowStart: step.windowStart, windowEnd: step.windowEnd, timezone: step.timezone, isConditional: step.isConditional, stage: step.stage, targetHarvestKg: step.targetHarvestKg })) });
       await tx.weatherSnapshot.create({ data: { farmId: input.farmId, fieldBlockId: input.facts.fieldBlockId as string, source: "open-meteo", observedAt: new Date(), payload: input.weather } });
       await tx.mission.update({ where: { missionId: input.missionId }, data: { approvedPlanId: plan.planId } });
     }, missionConfirmationTransactionOptions).catch((error: unknown) => { if (error instanceof Error && error.message === "stale-mission") throw error; throw error; });

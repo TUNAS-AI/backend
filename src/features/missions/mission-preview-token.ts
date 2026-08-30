@@ -18,11 +18,11 @@ export function signPreview<T extends Record<string, unknown>>(payload: T) {
 }
 export function verifyPreview<T extends SignedPayload>(token: string): T {
   const [body, signature, extra] = token.split(".");
-  if (!body || !signature || extra) throw new ApiError(400, "previewToken is invalid");
+  if (!body || !signature || extra) throw new ApiError(400, "previewToken is invalid", "PREVIEW_TOKEN_INVALID");
   const expected = Buffer.from(sign(body)); const received = Buffer.from(signature);
-  if (expected.length !== received.length || !timingSafeEqual(expected, received)) throw new ApiError(400, "previewToken is invalid");
+  if (expected.length !== received.length || !timingSafeEqual(expected, received)) throw new ApiError(400, "previewToken is invalid", "PREVIEW_TOKEN_INVALID");
   let payload: T;
-  try { payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as T; } catch { throw new ApiError(400, "previewToken is invalid"); }
-  if (!Number.isFinite(payload.exp) || payload.exp < Date.now()) throw new ApiError(409, "Mission preview has expired; plan again");
+  try { payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as T; } catch { throw new ApiError(400, "previewToken is invalid", "PREVIEW_TOKEN_INVALID"); }
+  if (!Number.isFinite(payload.exp) || payload.exp < Date.now()) throw new ApiError(409, "Mission preview has expired; plan again", "PREVIEW_EXPIRED");
   return payload;
 }

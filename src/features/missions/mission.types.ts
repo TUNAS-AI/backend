@@ -6,7 +6,7 @@ export type MissionCloseoutInput = { actualHarvestKg: number; actualDriedKg: num
 export type MessageInput = { role: "farmer" | "assistant"; content: string };
 export type FactProvenance = "FARMER_REPORTED" | "INFERRED";
 export type FactConfidence = "high" | "medium" | "low";
-export type MissionFactKey = "fieldBlockId" | "cropBatchIds" | "marketQuality" | "plannedHarvestKg" | "plannedDriedKg" | "deadline" | "availableWorkerCount" | "coveredDryingCapacityKg" | "notes";
+export type MissionFactKey = "fieldBlockId" | "cropBatchIds" | "marketQuality" | "plannedHarvestKg" | "plannedDriedKg" | "deadline" | "harvestDurationHours" | "estimatedHarvestableKg" | "rainProtectionAvailable" | "availableWorkerCount" | "coveredDryingCapacityKg" | "notes";
 export type MissionFactReview = { key: MissionFactKey; status: "confirmed" | "needs_clarification" | "missing"; reason: string; provenance: FactProvenance; confidence: FactConfidence };
 export type MissionFact = {
   fieldBlockId: string | null;
@@ -15,6 +15,9 @@ export type MissionFact = {
   plannedHarvestKg: number | null;
   plannedDriedKg: number | null;
   deadline: string | null;
+  harvestDurationHours: number | null;
+  estimatedHarvestableKg: number | null;
+  rainProtectionAvailable: boolean | null;
   availableWorkerCount: number | null;
   coveredDryingCapacityKg: number | null;
   notes: string | null;
@@ -37,5 +40,7 @@ export type PlannedActivity = {
   stage: "HARVESTING" | "DRYING";
   targetHarvestKg?: number | null;
 };
-export type GeneratedPlan = { planId?: string; name: string; summary: string; recommended: boolean; assumptions: string[]; risks: Record<string, string>; dryingEstimateDays: number; dryingEstimateReason: string; activities: PlannedActivity[] };
+export type GeneratedPlan = { planId?: string; name: string; summary: string; recommended: boolean; evidence?: string[]; tradeoffs?: string[]; assumptions: string[]; risks: Record<string, string>; dryingEstimateDays: number; dryingEstimateReason: string; activities: PlannedActivity[] };
+export type PlanInfeasibility = { code: "MISSING_WORKING_HOURS" | "QUANTITY_UNAVAILABLE" | "NO_DRY_HARVEST_WINDOW" | "DEADLINE_UNREACHABLE" | "DRYING_RAIN_UNPROTECTED"; reason: string; details: Record<string, unknown> };
+export type PlanningResult = { plans: GeneratedPlan[]; infeasibility: PlanInfeasibility | null };
 export type CloseoutSummary = { summary: string; lessons: string[] };

@@ -59,6 +59,8 @@ export class GoogleCalendarService {
 
   async removeMissionEvents(farmId: string, missionId: string) { return this.removeRecordedEvents(farmId, missionId); }
 
+  async removeFarmEvents(farmId: string) { return this.removeRecordedEvents(farmId); }
+
   async sync(ownerId: string) { return this.syncFarm(await callerFarmId(ownerId)); }
 
   async syncIfConnected(farmId: string) {

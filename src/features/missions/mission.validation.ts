@@ -5,9 +5,8 @@ import type { MessageInput, MissionCandidate, MissionCloseoutInput, MissionStepS
 
 const messageSchema = z.object({ role: z.enum(["farmer", "assistant"]), content: z.string().trim().min(1).max(4000) });
 const factsSchema = z.object({
-  fieldBlockId: z.string().uuid().nullable(), cropBatchIds: z.array(z.string().uuid()).max(12), marketQuality: z.enum(["Grade A", "Grade B", "Grade C"]).nullable(), plannedHarvestKg: z.number().positive().nullable(), plannedDriedKg: z.number().positive().nullable(), deadline: z.union([z.string().datetime(), z.string().date()]).nullable(), availableWorkerCount: z.number().int().positive().nullable(), coveredDryingCapacityKg: z.number().positive().nullable(), notes: z.string().min(1).nullable(), clarification: z.object({ key: z.string().min(1), question: z.string().min(1) }).nullable(),
+  fieldBlockId: z.string().uuid().nullable(), cropBatchIds: z.array(z.string().uuid()).max(12), marketQuality: z.enum(["Grade A", "Grade B", "Grade C"]).nullable(), plannedHarvestKg: z.number().positive().nullable(), plannedDriedKg: z.number().positive().nullable(), deadline: z.union([z.string().datetime(), z.string().date()]).nullable(), harvestDurationHours: z.number().positive().nullable(), estimatedHarvestableKg: z.number().positive().nullable(), rainProtectionAvailable: z.boolean().nullable(), availableWorkerCount: z.number().int().positive().nullable(), coveredDryingCapacityKg: z.number().positive().nullable(), notes: z.string().min(1).nullable(), clarification: z.object({ key: z.string().min(1), question: z.string().min(1) }).nullable(),
 });
-const reviewSchema = z.object({ key: z.enum(["fieldBlockId", "cropBatchIds", "marketQuality", "plannedHarvestKg", "plannedDriedKg", "deadline", "availableWorkerCount", "coveredDryingCapacityKg", "notes"]), status: z.enum(["confirmed", "needs_clarification", "missing"]), reason: z.string().min(1), provenance: z.enum(["FARMER_REPORTED", "INFERRED"]), confidence: z.enum(["high", "medium", "low"]) });
 const candidateSchema = z.object({ previewId: z.string().uuid(), messages: z.array(messageSchema).min(1).max(40), facts: factsSchema }).transform((candidate) => ({ ...candidate, review: [], blocks: [] }) as MissionCandidate);
 
 function parseSchema<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
@@ -24,9 +23,7 @@ export function parsePreviewInterpret(value: unknown) {
 export function parsePreviewCandidate(value: unknown): MissionCandidate { return parseSchema(candidateSchema, input(value).candidate, "candidate"); }
 export function parseConfirmation(value: unknown) { const body = input(value); return { previewToken: text(body.previewToken, "previewToken"), planId: uuid(body.planId, "planId") }; }
 export function parseReplanConfirmation(value: unknown) {
-  const confirmation = parseConfirmation(value); const stage = text(input(value).stage, "stage");
-  if (!(["WAITING", "HARVESTING", "DRYING"] as const).includes(stage as "WAITING" | "HARVESTING" | "DRYING")) throw new ApiError(400, "stage is invalid");
-  return { ...confirmation, stage: stage as "WAITING" | "HARVESTING" | "DRYING" };
+  return parseConfirmation(value);
 }
 export function parseCalendarRange(value: unknown) {
   const query = input(value); const from = text(query.from, "from"); const to = text(query.to, "to");

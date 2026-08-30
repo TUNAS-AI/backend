@@ -46,8 +46,7 @@ test("accepts the documented farmer closeout outcome", () => {
 });
 
 test("allows only executable stages when confirming a replacement plan", () => {
-  assert.deepEqual(parseReplanConfirmation({ previewToken: "token", planId: "00000000-0000-4000-8000-000000000001", stage: "DRYING" }), { previewToken: "token", planId: "00000000-0000-4000-8000-000000000001", stage: "DRYING" });
-  assert.throws(() => parseReplanConfirmation({ previewToken: "token", planId: "00000000-0000-4000-8000-000000000001", stage: "FINISHED" }), /stage is invalid/);
+  assert.deepEqual(parseReplanConfirmation({ previewToken: "token", planId: "00000000-0000-4000-8000-000000000001", stage: "DRYING" }), { previewToken: "token", planId: "00000000-0000-4000-8000-000000000001" });
 });
 
 test("uses only the selected field's six latest closeouts as planning history", () => {
@@ -95,7 +94,7 @@ test("logs only safe metadata for invalid planner output", () => {
 test("discards browser-provided mission review and fact blocks", () => {
   const candidate = parsePreviewCandidate({ candidate: {
     previewId: "00000000-0000-4000-8000-000000000001", messages: [{ role: "farmer", content: "Harvest shallots" }],
-    facts: { fieldBlockId: "00000000-0000-4000-8000-000000000002", cropBatchIds: ["00000000-0000-4000-8000-000000000003"], marketQuality: "Grade A", plannedHarvestKg: 80, plannedDriedKg: 70, deadline: "2026-07-23", availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: null },
+    facts: { fieldBlockId: "00000000-0000-4000-8000-000000000002", cropBatchIds: ["00000000-0000-4000-8000-000000000003"], marketQuality: "Grade A", plannedHarvestKg: 80, plannedDriedKg: 70, deadline: "2026-07-23", harvestDurationHours: 8, estimatedHarvestableKg: 80, rainProtectionAvailable: true, availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: null },
     review: [{ key: "deadline", status: "confirmed", reason: "forged", provenance: "INFERRED", confidence: "high" }], blocks: [{ key: "deadline", value: "forged", provenance: "INFERRED", confidence: "high" }],
   } });
   assert.deepEqual(candidate.review, []);

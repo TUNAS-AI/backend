@@ -97,7 +97,7 @@ and caller-scoped `context`; planner expects `context`, `weather`, and
 `farmTimezone`; closeout expects `context`. Use fixture IDs and non-production
 farm data when invoking graphs directly in Studio.
 
-The interpreter uses DeepSeek through LangChain to extract farmer-reported facts
+The interpreter uses Gemini `gemini-3.1-flash-lite` through LangChain to extract farmer-reported facts
 and ask one material clarification at a time. The planner receives only
 caller-scoped farm context, a normalized 72-hour Open-Meteo forecast, and the
 farmer-approved facts. It returns daily harvest windows and drying date ranges.
