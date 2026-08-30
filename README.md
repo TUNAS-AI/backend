@@ -17,6 +17,21 @@ alerts, operational-report approval, and approval-gated mission replanning.
 
 ## Run locally
 
+Docker Compose runs the API, its Nginx proxy, and ngrok. Copy the environment
+template, fill in the required database, Supabase, application, Telegram, and
+ngrok values, then start the stack:
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+The API is available at `http://localhost:3000`. The ngrok container exposes
+the API at `NGROK_DOMAIN` and the backend registers the Telegram webhook there.
+Start the frontend stack separately from `frontend/`.
+
+To run the backend directly without Docker instead:
+
 ```bash
 npm ci
 cp .env.example .env
@@ -128,9 +143,9 @@ All endpoints require a Supabase bearer token. Call them in this order:
 
 Set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `NGROK_AUTHTOKEN`, and
 `NGROK_DOMAIN`. `NGROK_DOMAIN` may be a hostname or HTTPS URL and must belong to
-the configured ngrok account. On backend startup, TUNAS starts `ngrok http 3000`
-and registers `${NGROK_DOMAIN}/api/telegram/webhook` with Telegram. The ngrok CLI
-must be installed on the backend host.
+the configured ngrok account. Docker Compose starts the ngrok sidecar against
+the API and the backend registers `${NGROK_DOMAIN}/api/telegram/webhook` with
+Telegram.
 
 An authenticated farmer connects once from the Farm page. The backend creates a
 10-minute one-time token, stores only its SHA-256 hash, and binds the Telegram
@@ -221,7 +236,7 @@ and required mission configuration without calling the model or weather provider
 ## Deployment
 
 The production stack runs the API behind Nginx. The API remains private inside
-the Docker network on port `3000`; Nginx is exposed on VPS port `8086`.
+the Docker network on port `3000`; Nginx is exposed on host port `3000`.
 
 ```bash
 cp .env.example .env
@@ -229,8 +244,12 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Confirm the deployment with `curl http://127.0.0.1:8086/health`. The production
+The Compose file defaults `FRONTEND_URL` and `CORS_ORIGIN` to the separate local
+frontend at `http://localhost:5173`. Override them in the Compose environment
+for a deployed frontend.
+
+Confirm the deployment with `curl http://127.0.0.1:3000/health`. The production
 container applies pending Prisma migrations before starting the HTTP server, so
 `DATABASE_URL` must be present in the VPS `.env` file. For HTTPS, place this
 service behind your VPS's TLS-enabled reverse proxy and forward requests to
-`http://127.0.0.1:8086`.
+`http://127.0.0.1:3000`.
