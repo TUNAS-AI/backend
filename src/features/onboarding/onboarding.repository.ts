@@ -22,6 +22,7 @@ export class OnboardingRepository {
           notes: (input.farm.notes ?? null) as string | null,
           timezone: (input.farm.timezone ?? "Asia/Jakarta") as string,
           defaultWorkerCount: input.farm.defaultWorkerCount as number,
+          rainProtectionAvailable: (input.farm.rainProtectionAvailable ?? null) as boolean | null,
           defaultWorkingHours: input.farm.defaultWorkingHours as Prisma.InputJsonValue,
         },
       });
@@ -45,6 +46,7 @@ export class OnboardingRepository {
             variety: batch.variety ?? null,
             plantingDate: batch.plantingDate ?? null,
             notes: batch.notes ?? null,
+            readinessStatus: batch.readinessStatus as string,
           })),
         });
       }

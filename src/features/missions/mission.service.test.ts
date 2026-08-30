@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { signPreview, verifyPreview } from "./mission-preview-token";
-import { canAdvanceMissionStage, completedFieldHistory, interpretationUnavailable, isStepTransitionAllowed, logInterpretationFailure, logPlanningFailure, MissionService, missionVersionTimestamp, nextMissionStage, planningUnavailable } from "./mission.service";
+import { applyBatchReadiness, canAdvanceMissionStage, completedFieldHistory, interpretationUnavailable, isStepTransitionAllowed, logInterpretationFailure, logPlanningFailure, MissionService, missionVersionTimestamp, nextMissionStage, planningUnavailable } from "./mission.service";
 import { parseCloseout, parsePreviewCandidate, parseReplanConfirmation } from "./mission.validation";
 
 test("rejects a tampered mission preview", () => {
@@ -39,6 +39,13 @@ test("requires ordered step progress before advancing operational stages", () =>
   assert.equal(canAdvanceMissionStage("HARVESTING", harvestingDone), true);
   assert.equal(isStepTransitionAllowed(harvestingDone[2], "IN_PROGRESS", harvestingDone), true);
   assert.equal(canAdvanceMissionStage("FINISHED", harvestingDone), false);
+});
+
+test("uses saved crop-batch readiness instead of interpreted readiness", () => {
+  const facts = { fieldBlockId: "field", cropBatchIds: ["ready", "blocked"], readinessConfirmed: true, destination: "IMMEDIATE_SALE" as const, plannedHarvestKg: 80, deadlineAt: "2026-09-01T00:00:00.000Z", notes: null, clarification: null };
+  assert.equal(applyBatchReadiness(facts, [{ cropBatchId: "ready", readinessStatus: "READY" }, { cropBatchId: "blocked", readinessStatus: "NOT_READY" }]).readinessConfirmed, false);
+  assert.equal(applyBatchReadiness({ ...facts, cropBatchIds: ["ready"] }, [{ cropBatchId: "ready", readinessStatus: "READY" }]).readinessConfirmed, true);
+  assert.equal(applyBatchReadiness({ ...facts, cropBatchIds: ["unset"] }, [{ cropBatchId: "unset", readinessStatus: null }]).readinessConfirmed, null);
 });
 
 test("accepts the documented farmer closeout outcome", () => {

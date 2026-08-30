@@ -1,5 +1,5 @@
 import { ApiError } from "../../shared/api-error";
-import { date, has, input, nullableText } from "../../shared/input-validation";
+import { date, has, input, nullableText, text } from "../../shared/input-validation";
 import { parseFieldBlock } from "../field-blocks/field-block.validation";
 import { parseFarm } from "../farm/farm.validation";
 import type { OnboardingInput } from "./onboarding.types";
@@ -10,6 +10,9 @@ function parseCropBatch(value: unknown, fieldIndex: number, batchIndex: number) 
   if (has(source, "variety")) result.variety = nullableText(source.variety, `fields[${fieldIndex}].cropBatches[${batchIndex}].variety`);
   if (has(source, "plantingDate")) result.plantingDate = source.plantingDate === null ? null : date(source.plantingDate, `fields[${fieldIndex}].cropBatches[${batchIndex}].plantingDate`);
   if (has(source, "notes")) result.notes = nullableText(source.notes, `fields[${fieldIndex}].cropBatches[${batchIndex}].notes`);
+  const readiness = text(source.readinessStatus, `fields[${fieldIndex}].cropBatches[${batchIndex}].readinessStatus`);
+  if (!["READY", "NOT_READY"].includes(readiness)) throw new ApiError(400, `fields[${fieldIndex}].cropBatches[${batchIndex}].readinessStatus must be READY or NOT_READY`);
+  result.readinessStatus = readiness as "READY" | "NOT_READY";
   return result;
 }
 

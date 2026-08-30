@@ -57,7 +57,8 @@ export class TunasService {
       if (signature(impact) === signature(previousImpact)) { await this.repository.saveWeather(farmId, field.fieldBlockId, weather); continue; }
       const affected = impact[0]; const rainDays = new Set(impact.flatMap(({ rainy }) => rainy.map((hour) => hour.time.slice(0, 10))));
       const drying = affected.step.stage === "DRYING";
-      const protection = mission.constraints.find((item) => item.key === "rainProtectionAvailable")?.value === true;
+      const missionProtection = mission.constraints.find((item) => item.key === "rainProtectionAvailable");
+      const protection = missionProtection ? missionProtection.value === true : farm.rainProtectionAvailable === true;
       const kind = rainDays.size >= 2 ? "irregular-rain" : drying ? "drying-rain" : "harvest-rain";
       const recommendation = rainDays.size >= 2 ? "Tinjau ulang jadwal panen dan pengeringan." : drying ? protection ? "Siapkan penutup sebelum hujan." : "Tutup atau pindahkan bawang ke tempat terlindung." : "Tinjau waktu panen agar tidak terkena hujan.";
       const content = `Prakiraan hujan berubah dan dapat mengenai ${affected.step.title}. ${recommendation} Belum ada perubahan jadwal.`;

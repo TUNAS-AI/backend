@@ -44,6 +44,7 @@ model Farm {
   timezone                  String                       @default("Asia/Jakarta") @db.Text
   defaultWorkingHours       Json?                        @map("default_working_hours") @db.JsonB
   defaultWorkerCount        Int                          @default(1) @map("default_worker_count")
+  rainProtectionAvailable   Boolean?                     @map("rain_protection_available")
   dryingProfile             Json?                        @map("drying_profile") @db.JsonB
   schedulingDurations       Json                         @default("{\"readinessCheckMinutes\":15,\"harvestMinutes\":360,\"transferToDryingMinutes\":30,\"beginDryingMinutes\":15,\"dryingInspectionMinutes\":30}") @map("scheduling_durations") @db.JsonB
   createdAt                 DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -387,6 +388,7 @@ model CropBatch {
   plantingDate      DateTime?           @map("planting_date") @db.Date
   notes             String?             @db.Text
   status            String              @default("active") @db.Text
+  readinessStatus   String?             @map("readiness_status") @db.Text
   createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
   farm              Farm                @relation(fields: [farmId], references: [farmId], onDelete: Cascade)

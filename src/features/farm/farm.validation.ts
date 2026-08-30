@@ -33,6 +33,7 @@ function dryingProfile(value: unknown): Input | null {
   const method = text(source.method, "dryingProfile.method");
   if (!["FIELD_SUN", "RACK_SUN", "COVERED_VENTILATED", "INSTORE"].includes(method)) throw new ApiError(400, "dryingProfile.method is invalid");
   const profile = { method, capacityKg: number(source.capacityKg, "dryingProfile.capacityKg", 0.001), protectedCapacityKg: number(source.protectedCapacityKg, "dryingProfile.protectedCapacityKg", 0), minDays: number(source.minDays, "dryingProfile.minDays", 1), maxDays: number(source.maxDays, "dryingProfile.maxDays", 1) };
+  if (profile.protectedCapacityKg > profile.capacityKg) throw new ApiError(400, "dryingProfile.protectedCapacityKg must not exceed capacityKg");
   if (profile.minDays > profile.maxDays) throw new ApiError(400, "dryingProfile.minDays must not exceed maxDays");
   return profile;
 }
@@ -49,6 +50,10 @@ export function parseFarm(value: unknown, create: boolean): FarmInput {
   for (const key of ["location", "notes"] as const) if (has(source, key)) result[key] = nullableText(source[key], key);
   if (has(source, "timezone")) result.timezone = text(source.timezone, "timezone");
   if (has(source, "defaultWorkerCount")) result.defaultWorkerCount = number(source.defaultWorkerCount, "defaultWorkerCount", 1, true);
+  if (has(source, "rainProtectionAvailable")) {
+    if (source.rainProtectionAvailable !== null && typeof source.rainProtectionAvailable !== "boolean") throw new ApiError(400, "rainProtectionAvailable must be a boolean or null");
+    result.rainProtectionAvailable = source.rainProtectionAvailable;
+  }
   if (has(source, "defaultWorkingHours")) result.defaultWorkingHours = workingHours(source.defaultWorkingHours);
   if (has(source, "dryingProfile")) result.dryingProfile = dryingProfile(source.dryingProfile);
   if (has(source, "schedulingDurations")) result.schedulingDurations = schedulingDurations(source.schedulingDurations);

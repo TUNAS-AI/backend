@@ -91,15 +91,15 @@ function withObservedRain(weather: unknown, observedAt?: string) {
 function authoritativeStateHash(context: Awaited<ReturnType<MissionRepository["context"]>>, candidate: MissionCandidate, mission?: MissionRecord) {
   const field = context.fields.find((item) => item.fieldBlockId === candidate.facts.fieldBlockId);
   const batches = context.cropBatches.filter((item) => candidate.facts.cropBatchIds.includes(item.cropBatchId));
-  const state = { farm: { timezone: context.farm.timezone, defaultWorkingHours: context.farm.defaultWorkingHours, dryingProfile: context.farm.dryingProfile }, field, batches, facts: candidate.facts, mission: mission ? { approvedPlanId: mission.approvedPlanId, revision: mission.revision, stage: mission.stage, steps: editableSteps(mission) } : null };
+  const state = { farm: { timezone: context.farm.timezone, defaultWorkingHours: context.farm.defaultWorkingHours, rainProtectionAvailable: context.farm.rainProtectionAvailable, dryingProfile: context.farm.dryingProfile }, field, batches, facts: candidate.facts, mission: mission ? { approvedPlanId: mission.approvedPlanId, revision: mission.revision, stage: mission.stage, steps: editableSteps(mission) } : null };
   return createHash("sha256").update(JSON.stringify(canonical(state))).digest("hex");
 }
 function interpretationContext(context: Awaited<ReturnType<MissionRepository["context"]>>, messages: MessageInput[], existingFacts?: MissionFact, responseLanguage?: "id") {
   return {
     farmer: { displayName: context.farm.owner.displayName, locale: context.farm.owner.locale, timezone: context.farm.owner.timezone },
-    farm: { name: context.farm.name, location: context.farm.location, notes: context.farm.notes, timezone: context.farm.timezone, defaultWorkingHours: context.farm.defaultWorkingHours, defaultWorkerCount: context.farm.defaultWorkerCount, dryingProfile: context.farm.dryingProfile },
+    farm: { name: context.farm.name, location: context.farm.location, notes: context.farm.notes, timezone: context.farm.timezone, defaultWorkingHours: context.farm.defaultWorkingHours, defaultWorkerCount: context.farm.defaultWorkerCount, rainProtectionAvailable: context.farm.rainProtectionAvailable, dryingProfile: context.farm.dryingProfile },
     fields: context.fields.map((field) => ({ fieldBlockId: field.fieldBlockId, name: field.name, areaHectares: field.areaHectares, latitude: field.latitude, longitude: field.longitude, status: field.status, notes: field.notes })),
-    cropBatches: context.cropBatches.map((batch) => ({ cropBatchId: batch.cropBatchId, fieldBlockId: batch.fieldBlockId, crop: batch.crop, variety: batch.variety, plantingDate: batch.plantingDate, status: batch.status, notes: batch.notes })),
+    cropBatches: context.cropBatches.map((batch) => ({ cropBatchId: batch.cropBatchId, fieldBlockId: batch.fieldBlockId, crop: batch.crop, variety: batch.variety, plantingDate: batch.plantingDate, status: batch.status, readinessStatus: batch.readinessStatus, notes: batch.notes })),
     completedMissionHistory: context.history.map((outcome) => ({ fieldBlockId: outcome.mission.fieldBlockId, originalMessage: outcome.mission.originalMessage, plannedHarvestKg: outcome.plannedHarvestKg, plannedDriedKg: outcome.plannedDriedKg, actualHarvestKg: outcome.actualHarvestKg, actualDriedKg: outcome.actualDriedKg, notes: outcome.notes, summary: outcome.summary })),
     conversation: messages,
     existingFacts: existingFacts ?? null,
@@ -107,6 +107,11 @@ function interpretationContext(context: Awaited<ReturnType<MissionRepository["co
   };
 }
 function confidence(value: unknown): "low" | "high" { return value === null || value === "" || (Array.isArray(value) && !value.length) ? "low" : "high"; }
+export function applyBatchReadiness(fact: MissionFact, batches: Array<{ cropBatchId: string; readinessStatus?: string | null }>): MissionFact {
+  const selected = batches.filter((batch) => fact.cropBatchIds.includes(batch.cropBatchId));
+  const readinessConfirmed = selected.length && selected.every((batch) => batch.readinessStatus === "READY") ? true : selected.some((batch) => batch.readinessStatus === "NOT_READY") ? false : null;
+  return { ...fact, readinessConfirmed };
+}
 function review(facts: MissionFact) {
   return factKeys.map((key) => ({ key, status: confidence(facts[key]) === "high" ? "confirmed" as const : "missing" as const, reason: confidence(facts[key]) === "high" ? "Ready for planning." : optional.has(key) ? "Optional; add it if it applies to this method." : "This confirmed operational detail is needed before planning.", provenance: "FARMER_REPORTED" as const, confidence: confidence(facts[key]) }));
 }
@@ -187,7 +192,7 @@ export class MissionService {
   }
 
   private canonicalCandidate(candidate: MissionCandidate, context: Awaited<ReturnType<MissionRepository["context"]>>) {
-    const facts = { ...candidate.facts, clarification: null };
+    const facts = applyBatchReadiness({ ...candidate.facts, clarification: null }, context.cropBatches);
     this.validateFacts(facts, context);
     return { previewId: candidate.previewId, messages: candidate.messages, facts, review: review(facts), blocks: blocks(facts) } satisfies MissionCandidate;
   }
@@ -212,8 +217,9 @@ export class MissionService {
       throw interpretationUnavailable(error);
     }
     this.validateFacts(interpretation.facts, context);
-    const assistant = interpretation.facts.clarification ? [{ role: "assistant" as const, content: interpretation.facts.clarification.question }] : [];
-    return { previewId, messages: [...messages, ...assistant], facts: interpretation.facts, review: interpretation.review, blocks: blocks(interpretation.facts), manualOptions: this.manualOptions(context) } satisfies MissionCandidate;
+    const facts = applyBatchReadiness(interpretation.facts, context.cropBatches);
+    const assistant = facts.clarification ? [{ role: "assistant" as const, content: facts.clarification.question }] : [];
+    return { previewId, messages: [...messages, ...assistant], facts, review: review(facts), blocks: blocks(facts), manualOptions: this.manualOptions(context) } satisfies MissionCandidate;
   }
 
   private requireComplete(candidate: MissionCandidate) {

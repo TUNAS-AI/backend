@@ -7,6 +7,16 @@ test("accepts nullable farm notes on create and update", () => {
   assert.equal(parseFarm({ notes: null }, false).notes, null);
 });
 
+test("accepts three-state rain protection and rejects other values", () => {
+  assert.equal(parseFarm({ rainProtectionAvailable: true }, false).rainProtectionAvailable, true);
+  assert.equal(parseFarm({ rainProtectionAvailable: null }, false).rainProtectionAvailable, null);
+  assert.throws(() => parseFarm({ rainProtectionAvailable: "yes" }, false), /boolean or null/);
+});
+
+test("rejects protected drying capacity above total capacity", () => {
+  assert.throws(() => parseFarm({ dryingProfile: { method: "FIELD_SUN", capacityKg: 100, protectedCapacityKg: 101, minDays: 3, maxDays: 5 } }, false), /must not exceed capacityKg/);
+});
+
 test("rejects overlapping default work windows", () => {
   assert.throws(
     () => parseFarm({

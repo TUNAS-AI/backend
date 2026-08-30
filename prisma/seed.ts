@@ -20,8 +20,9 @@ async function seed() {
         location: "Brebes, Central Java",
         timezone: "Asia/Jakarta",
         defaultWorkerCount: 4,
+        rainProtectionAvailable: true,
         defaultWorkingHours: workingHours,
-        notes: "Workers: Pak Dedi, Pak Ujang, Bu Sari, and Pak Wawan. Drying method: outdoor drying. Rain protection: tarpaulin available.",
+        notes: "Outdoor drying beside the packing shed.",
       },
     });
     await tx.fieldBlock.create({
@@ -31,8 +32,8 @@ async function seed() {
         latitude: -6.867120,
         longitude: 109.037109,
         areaHectares: 0.8,
-        notes: "Farmer-reported readiness: READY. Estimated harvestable quantity: 650 kg.",
-        cropBatches: { create: { farmId: farm.farmId, crop: "shallot", variety: "Bima Brebes", plantingDate, notes: "Farmer-reported readiness: READY. Estimated harvestable quantity: 650 kg." } },
+        notes: "Estimated harvestable quantity: 650 kg.",
+        cropBatches: { create: { farmId: farm.farmId, crop: "shallot", variety: "Bima Brebes", plantingDate, readinessStatus: "READY", notes: "Estimated harvestable quantity: 650 kg." } },
       },
     });
   });

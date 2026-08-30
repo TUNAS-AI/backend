@@ -8,6 +8,7 @@ export type OnboardingInput = {
       variety?: string | null;
       plantingDate?: Date | null;
       notes?: string | null;
+      readinessStatus?: "READY" | "NOT_READY";
     }>;
   }>;
 };

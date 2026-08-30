@@ -13,7 +13,7 @@ const validPayload = {
   fields: [{
     name: "North Block",
     coordinates: { latitude: -6.914744, longitude: 107.60981 },
-    cropBatches: [{ variety: "Bima Brebes", plantingDate: "2026-05-15" }],
+    cropBatches: [{ variety: "Bima Brebes", plantingDate: "2026-05-15", readinessStatus: "READY" }],
   }],
 };
 
@@ -23,6 +23,7 @@ test("parses an atomic farm onboarding payload", () => {
   assert.equal(parsed.farm.name, "Kebun Cisarua");
   assert.equal(parsed.fields[0].latitude, -6.914744);
   assert.equal(parsed.fields[0].cropBatches[0].variety, "Bima Brebes");
+  assert.equal(parsed.fields[0].cropBatches[0].readinessStatus, "READY");
 });
 
 test("rejects onboarding without a crop batch for every field", () => {

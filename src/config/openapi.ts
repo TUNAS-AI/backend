@@ -83,6 +83,7 @@ export const openApiDocument = swaggerJSDoc({
             notes: { type: "string", nullable: true, example: "Near the village road." },
             timezone: { type: "string", example: "Asia/Jakarta" },
             defaultWorkerCount: { type: "integer", minimum: 1, example: 5 },
+            rainProtectionAvailable: { type: "boolean", nullable: true, example: true },
             defaultWorkingHours: { $ref: "#/components/schemas/WeeklyWorkingHours" },
           },
         },
@@ -96,6 +97,7 @@ export const openApiDocument = swaggerJSDoc({
             notes: { type: "string", nullable: true, example: "Near the village road." },
             timezone: { type: "string", example: "Asia/Jakarta" },
             defaultWorkerCount: { type: "integer", minimum: 1, example: 5 },
+            rainProtectionAvailable: { type: "boolean", nullable: true, example: true },
             defaultWorkingHours: { $ref: "#/components/schemas/WeeklyWorkingHours" },
             dryingProfile: { $ref: "#/components/schemas/DryingProfile" },
             schedulingDurations: { $ref: "#/components/schemas/SchedulingDurations" },
@@ -143,13 +145,14 @@ export const openApiDocument = swaggerJSDoc({
         },
         CropBatchCreateInput: {
           type: "object",
-          required: ["fieldBlockId"],
+          required: ["fieldBlockId", "readinessStatus"],
           properties: {
             fieldBlockId: { type: "string", format: "uuid" },
             variety: { type: "string", nullable: true, example: "Bima Brebes" },
             plantingDate: { type: "string", format: "date", nullable: true, example: "2026-05-15" },
             notes: { type: "string", nullable: true },
             status: { type: "string", example: "active" },
+            readinessStatus: { type: "string", enum: ["READY", "NOT_READY"] },
           },
         },
         CropBatchUpdateInput: {
@@ -160,14 +163,17 @@ export const openApiDocument = swaggerJSDoc({
             plantingDate: { type: "string", format: "date", nullable: true },
             notes: { type: "string", nullable: true },
             status: { type: "string" },
+            readinessStatus: { type: "string", enum: ["READY", "NOT_READY"] },
           },
         },
         OnboardingCropBatchInput: {
           type: "object",
+          required: ["readinessStatus"],
           properties: {
             variety: { type: "string", nullable: true, example: "Bima Brebes" },
             plantingDate: { type: "string", format: "date", nullable: true, example: "2026-05-15" },
             notes: { type: "string", nullable: true },
+            readinessStatus: { type: "string", enum: ["READY", "NOT_READY"] },
           },
         },
         OnboardingFieldInput: {
