@@ -16,8 +16,9 @@ type TelegramMessage = { message_id: number; text?: string; chat: TelegramChat; 
 type TelegramCallback = { id: string; data?: string; from: TelegramUser; message?: TelegramMessage };
 export type TelegramUpdate = { update_id?: number; message?: TelegramMessage; callback_query?: TelegramCallback };
 export const telegramExternalMessageId = (updateId: number | undefined, chatId: number | string, messageId: number) => updateId === undefined ? `message:${chatId}:${messageId}` : `update:${updateId}`;
-type AlertInput = { ownerId: string; missionId: string; demo: boolean; change: string; activity: string; impact: string; recommendation: string };
+type AlertInput = { ownerId: string; missionId: string; demo: boolean; change: string; activity: string; impact: string; recommendation: string; forecast?: { date: string; start: string; end: string; precipitation: number; probability: number } };
 type CallbackAction = { telegramActionId?: string; action: string; payload?: unknown; farmId: string; missionId?: string; telegramMessageId: string | null; expiresAt?: Date; consumedAt?: Date | null; connection: { userId?: string; telegramConnectionId?: string; telegramUserId: string; telegramChatId: string }; mission: { farmId: string } };
+type ReplanSummary = { missionName: string; workers?: number; harvest?: string; drying?: string };
 export function telegramCallbackAuthorized(action: CallbackAction | null, callback: TelegramCallback): action is CallbackAction { return Boolean(action && callback.message && action.connection.telegramUserId === String(callback.from.id) && action.connection.telegramChatId === String(callback.message.chat.id) && action.telegramMessageId === String(callback.message.message_id) && action.mission.farmId === action.farmId); }
 type OperationalApi = Pick<TunasService, "interact" | "approve" | "reject" | "cancel">;
 
@@ -57,11 +58,13 @@ export class TelegramService {
     const connection = mission.farm.owner.telegramConnection;
     if (!connection) throw new ApiError(409, "Hubungkan akun Telegram di halaman Farm terlebih dahulu.", "TELEGRAM_NOT_CONNECTED");
     const token = telegramToken();
-    const pending = await this.repository.createAction({ telegramConnectionId: connection.telegramConnectionId, farmId: mission.farmId, missionId: mission.missionId, action: "WEATHER_REPLAN", tokenHash: telegramTokenHash(token), expiresAt: new Date(Date.now() + ACTION_TTL_MS) });
-    const title = input.demo ? "DEMO PERINGATAN HUJAN" : "PERINGATAN HUJAN";
-    const text = `<b>${title}</b>\n\n<b>Misi:</b> ${escapeHtml(mission.originalMessage)}\n<b>Perubahan:</b> ${escapeHtml(input.change)}\n<b>Kegiatan terdampak:</b> ${escapeHtml(input.activity)}\n<b>Dampak:</b> ${escapeHtml(input.impact)}\n<b>Saran:</b> ${escapeHtml(input.recommendation)}\n<b>Status:</b> Belum ada perubahan jadwal. TUNAS akan membuat usulan yang tetap memerlukan persetujuan.`;
+    const pending = await this.repository.createAction({ telegramConnectionId: connection.telegramConnectionId, farmId: mission.farmId, missionId: mission.missionId, action: input.demo ? "DEMO_WEATHER_DECISION" : "WEATHER_REPLAN", tokenHash: telegramTokenHash(token), expiresAt: new Date(Date.now() + ACTION_TTL_MS) });
+    const title = input.demo ? "⚠️ DEMO: Peringatan cuaca" : "PERINGATAN HUJAN";
+    const text = input.demo && input.forecast
+      ? `<b>${title}</b>\n${escapeHtml(mission.originalMessage)}\n\n<b>Prakiraan simulasi menunjukkan:</b>\n🌧️ Hujan diperkirakan ${escapeHtml(input.forecast.date)}, ${escapeHtml(input.forecast.start)}–${escapeHtml(input.forecast.end)} WIB\n💧 Intensitas sekitar ${input.forecast.precipitation.toLocaleString("id-ID")} mm/jam\n📊 Probabilitas hujan ${input.forecast.probability}%\n\n<b>Aktivitas terdampak</b>\n${escapeHtml(input.activity)}\n${escapeHtml(input.impact)}\n\n<b>Rekomendasi TUNAS</b>\n• Periksa kondisi satu jam sebelum hujan\n• Siapkan terpal sebelum hujan\n• Periksa kembali setelah hujan\n\nBelum ada perubahan yang diterapkan. Ini adalah simulasi.`
+      : `<b>${title}</b>\n\n<b>Misi:</b> ${escapeHtml(mission.originalMessage)}\n<b>Perubahan:</b> ${escapeHtml(input.change)}\n<b>Kegiatan terdampak:</b> ${escapeHtml(input.activity)}\n<b>Dampak:</b> ${escapeHtml(input.impact)}\n<b>Saran:</b> ${escapeHtml(input.recommendation)}\n<b>Status:</b> Belum ada perubahan jadwal. TUNAS akan membuat usulan yang tetap memerlukan persetujuan.`;
     try {
-      const sent = await this.api<{ message_id: number }>("sendMessage", { chat_id: connection.telegramChatId, text, parse_mode: "HTML", reply_markup: { inline_keyboard: [[{ text: "Buat usulan ulang", callback_data: `action:${token}:generate` }]] } });
+      const sent = await this.api<{ message_id: number }>("sendMessage", { chat_id: connection.telegramChatId, text, parse_mode: "HTML", reply_markup: input.demo ? decisionKeyboard(token, "Setujui Replan (Demo)", "Tolak (Demo)") : { inline_keyboard: [[{ text: "Buat usulan ulang", callback_data: `action:${token}:generate` }]] } });
       await this.repository.bindActionMessage(pending.telegramActionId, String(sent.message_id));
       return { delivered: true as const, telegramMessageId: String(sent.message_id) };
     } catch (error) {
@@ -167,14 +170,15 @@ export class TelegramService {
     if (action.consumedAt || action.expiresAt <= new Date()) { await this.answer(callback.id, "Tindakan sudah dipakai atau kedaluwarsa.", true); return; }
     const consumedAt = new Date();
     if (!await this.repository.consumeAction(action.telegramActionId, consumedAt)) { await this.answer(callback.id, "Tindakan sudah dipakai atau kedaluwarsa.", true); return; }
+    await this.bestEffort("answer callback", () => this.answer(callback.id, "Keputusan sedang diproses."));
     try {
       await this.handleAction(action, match[2] as "approve" | "reject" | "generate", callback.message);
-      await this.answer(callback.id, "Keputusan diproses.");
-      await this.api("editMessageReplyMarkup", { chat_id: callback.message.chat.id, message_id: callback.message.message_id, reply_markup: { inline_keyboard: [] } });
     } catch (error) {
       await this.repository.releaseAction(action.telegramActionId, consumedAt);
       await this.answer(callback.id, error instanceof ApiError ? error.message : "Tindakan belum dapat diproses. Coba lagi.", true);
+      return;
     }
+    await this.bestEffort("remove callback buttons", () => this.api("editMessageReplyMarkup", { chat_id: callback.message!.chat.id, message_id: callback.message!.message_id, reply_markup: { inline_keyboard: [] } }));
   }
 
   private async operations() {
@@ -202,53 +206,69 @@ export class TelegramService {
 
   private async handleAction(action: CallbackAction, decision: "approve" | "reject" | "generate", message: TelegramMessage) {
     const ownerId = action.connection.userId!;
-    const payload = action.payload as { pendingActionId?: string; report?: OperationalReportInput; previewToken?: string; planId?: string } | null;
+    const payload = action.payload as { pendingActionId?: string; report?: OperationalReportInput; previewToken?: string; planId?: string; summary?: ReplanSummary } | null;
+    if (action.action === "DEMO_WEATHER_DECISION" && decision !== "generate") { await this.api("sendMessage", { chat_id: message.chat.id, reply_to_message_id: message.message_id, text: decision === "approve" ? "DEMO: Usulan perlindungan disetujui untuk simulasi. Misi, jadwal, dan Google Calendar tidak berubah." : "DEMO: Usulan perlindungan ditolak. Tidak ada data yang berubah." }); return; }
     if (action.action === "WEATHER_REPLAN" && decision === "generate") { await this.sendReplanProposal(ownerId, action.missionId!, message.chat.id, message.message_id, payload?.report); return; }
     if (action.action === "REPORT_DECISION" && payload?.pendingActionId && decision !== "generate") {
       const state = decision === "approve" ? await (await this.operations()).approve(ownerId, payload.pendingActionId) : await (await this.operations()).reject(ownerId, payload.pendingActionId);
-      await this.api("sendMessage", { chat_id: message.chat.id, reply_to_message_id: message.message_id, text: renderOperationalState(state), parse_mode: "HTML" });
+      await this.bestEffort("send report decision", () => this.api("sendMessage", { chat_id: message.chat.id, reply_to_message_id: message.message_id, text: renderOperationalState(state), parse_mode: "HTML" }));
       if (decision === "approve" && state.impact?.replanSupported && payload.report) {
-        await this.sendReplanOffer(action.connection.telegramConnectionId!, action.farmId, action.missionId!, message.chat.id, message.message_id, payload.report);
+        try { await this.sendReplanProposal(ownerId, action.missionId!, message.chat.id, message.message_id, payload.report); }
+        catch {
+          await this.bestEffort("send replan recovery", () => this.api("sendMessage", { chat_id: message.chat.id, reply_to_message_id: message.message_id, text: "Laporan sudah disimpan, tetapi usulan jadwal baru belum berhasil dibuat. Rencana aktif belum berubah. Minta TUNAS membuat rencana ulang lagi." }));
+        }
       }
       return;
     }
     if (action.action === "REPLAN_DECISION" && payload?.previewToken && payload.planId && decision !== "generate") {
       if (decision === "reject") { await this.api("sendMessage", { chat_id: message.chat.id, reply_to_message_id: message.message_id, text: "Usulan rencana ulang ditolak. Rencana aktif tidak berubah." }); return; }
-      await this.missions.confirmReplan(ownerId, action.missionId!, { previewToken: payload.previewToken, planId: payload.planId });
-      await this.api("sendMessage", { chat_id: message.chat.id, reply_to_message_id: message.message_id, text: "Rencana ulang disetujui dan sekarang menjadi rencana aktif. Kegiatan yang sudah selesai tetap dipertahankan." });
+      const result = await this.missions.confirmReplan(ownerId, action.missionId!, { previewToken: payload.previewToken, planId: payload.planId });
+      const calendar = result.calendarSync.status === "SYNCED" ? "Google Calendar telah diperbarui." : result.calendarSync.status === "NOT_CONNECTED" ? "Google Calendar tidak terhubung. Jadwal di TUNAS tetap sudah diperbarui." : "Jadwal di TUNAS telah diperbarui, tetapi sinkronisasi Google Calendar belum berhasil. Coba sinkronkan kembali dari TUNAS.";
+      const details = payload.summary ? [payload.summary.workers ? `• Pekerja: ${payload.summary.workers} orang` : null, payload.summary.harvest ? `• Panen: ${payload.summary.harvest}` : null, payload.summary.drying ? `• Mulai pengeringan: ${payload.summary.drying}` : null].filter(Boolean).join("\n") : "";
+      const plainText = `Replan disetujui\n\nJadwal ${payload.summary?.missionName ?? "misi aktif"} telah diperbarui${details ? `:\n${details}` : "."}\n\nKegiatan yang sudah selesai tetap dipertahankan.\nMisi tetap aktif.\n\n${calendar}`;
+      try { await this.api("sendMessage", { chat_id: message.chat.id, reply_to_message_id: message.message_id, text: `<b>✅ Replan disetujui</b>${escapeHtml(plainText.slice("Replan disetujui".length))}`, parse_mode: "HTML" }); }
+      catch { await this.bestEffort("send replan decision fallback", () => this.api("sendMessage", { chat_id: message.chat.id, text: plainText })); }
       return;
     }
     throw new ApiError(409, "Keputusan tidak cocok dengan tindakan ini.");
   }
 
-  private async sendReplanOffer(telegramConnectionId: string, farmId: string, missionId: string, chatId: number | string, replyTo: number, report: OperationalReportInput) {
-    const token = telegramToken();
-    const action = await this.repository.createAction({ telegramConnectionId, farmId, missionId, action: "WEATHER_REPLAN", tokenHash: telegramTokenHash(token), expiresAt: new Date(Date.now() + ACTION_TTL_MS), payload: { report } });
-    try {
-      const sent = await this.api<{ message_id: number }>("sendMessage", { chat_id: chatId, reply_to_message_id: replyTo, text: "Kondisi ini dapat memengaruhi kegiatan yang belum selesai. Buat usulan rencana ulang berdasarkan laporan ini?", reply_markup: { inline_keyboard: [[{ text: "Buat rencana ulang", callback_data: `action:${token}:generate` }]] } });
-      await this.repository.bindActionMessage(action.telegramActionId, String(sent.message_id));
-    } catch (error) { await this.repository.deleteAction(action.telegramActionId); throw error; }
-  }
-
   private async sendReplanProposal(ownerId: string, missionId: string, chatId: number | string, replyTo: number, report?: OperationalReportInput, instruction?: string) {
     const preview = report ? await this.missions.replanFromReport(ownerId, missionId, report) : await this.missions.replanFromInstruction(ownerId, missionId, instruction);
     if (preview.status === "clarification") { await this.api("sendMessage", { chat_id: chatId, reply_to_message_id: replyTo, text: escapeHtml(preview.question), parse_mode: "HTML" }); return; }
-    await this.sendPreparedReplanProposal(ownerId, missionId, chatId, replyTo, preview);
+    await this.sendPreparedReplanProposal(ownerId, missionId, chatId, replyTo, preview, report);
   }
 
-  private async sendPreparedReplanProposal(ownerId: string, missionId: string, chatId: number | string, replyTo: number, preview: Exclude<Awaited<ReturnType<MissionService["replanFromInstruction"]>>, { status: "clarification" }>) {
+  private async sendPreparedReplanProposal(ownerId: string, missionId: string, chatId: number | string, replyTo: number, preview: Exclude<Awaited<ReturnType<MissionService["replanFromInstruction"]>>, { status: "clarification" }>, report?: OperationalReportInput) {
     if (preview.status === "infeasible") { await this.api("sendMessage", { chat_id: chatId, reply_to_message_id: replyTo, text: `<b>Tidak ada rencana ulang yang layak</b>\n\n${escapeHtml(preview.blockers.join(" "))}`, parse_mode: "HTML" }); return; }
     const recommended = preview.candidates.find((item) => item.planId === preview.recommendation.planId)!;
     const mission = await this.repository.ownerMission(ownerId, missionId); if (!mission?.farm.owner.telegramConnection) throw new ApiError(409, "Telegram connection is unavailable");
+    const missionName = mission.fieldBlock?.name ? `Panen ${mission.fieldBlock.name}` : mission.originalMessage;
+    const harvest = recommended.activities.find((item) => item.actionKind === "HARVEST");
+    const drying = recommended.activities.find((item) => item.actionKind === "BEGIN_DRYING");
+    const proposedWorkers = report?.reportType === "WORKER_AVAILABILITY_CHANGED" ? report.payload.availableWorkers : harvest?.workers ?? undefined;
+    const proposedMinutes = report?.reportType === "WORKER_AVAILABILITY_CHANGED" ? report.payload.estimatedHarvestMinutes : undefined;
+    const constraint = (key: string) => mission.constraints.find((item) => item.key === key)?.value;
+    const previousWorkers = typeof constraint("workers") === "number" ? Number(constraint("workers")) : mission.farm.defaultWorkerCount;
+    const schedulingDurations = mission.farm.schedulingDurations as { harvestMinutes?: unknown } | null;
+    const previousMinutes = typeof constraint("harvestDurationMinutes") === "number" ? Number(constraint("harvestDurationMinutes")) : typeof schedulingDurations?.harvestMinutes === "number" ? schedulingDurations.harvestMinutes : undefined;
     const token = telegramToken();
-    const pending = await this.repository.createAction({ telegramConnectionId: mission.farm.owner.telegramConnection.telegramConnectionId, farmId: mission.farmId, missionId, action: "REPLAN_DECISION", tokenHash: telegramTokenHash(token), expiresAt: new Date(Date.now() + ACTION_TTL_MS), payload: { previewToken: preview.previewToken, planId: recommended.planId } });
-    const activities = recommended.activities.map((item) => `• ${escapeHtml(localizePlanText(item.title))}: ${formatDate(item.startsOn)} - ${formatDate(item.endsOn)}`).join("\n");
-    const text = `<b>Usulan rencana ulang</b>\n\n${escapeHtml(localizePlanText(recommended.name))}\n${escapeHtml(localizePlanText(recommended.summary))}\n\n<b>Kegiatan mendatang</b>\n${activities}\n\n<b>Alasan utama</b>\n${escapeHtml(localizePlanText(preview.recommendation.reasons.join(" ")))}\n\nKegiatan yang sudah selesai tidak akan diubah.`;
-    try { const sent = await this.api<{ message_id: number }>("sendMessage", { chat_id: chatId, reply_to_message_id: replyTo, text, parse_mode: "HTML", reply_markup: decisionKeyboard(token) }); await this.repository.bindActionMessage(pending.telegramActionId, String(sent.message_id)); }
+    const summary: ReplanSummary = { missionName, workers: proposedWorkers, harvest: harvest ? activityMoment(harvest) : undefined, drying: drying ? activityMoment(drying) : undefined };
+    const pending = await this.repository.createAction({ telegramConnectionId: mission.farm.owner.telegramConnection.telegramConnectionId, farmId: mission.farmId, missionId, action: "REPLAN_DECISION", tokenHash: telegramTokenHash(token), expiresAt: new Date(Date.now() + ACTION_TTL_MS), payload: { previewToken: preview.previewToken, planId: recommended.planId, summary } });
+    const activities = recommended.activities.map((item) => `• ${escapeHtml(actionKindLabel(item.actionKind))}: ${formatDate(item.startsOn)}${item.windowStart && item.windowEnd ? `, ${item.windowStart}–${item.windowEnd} WIB` : ""}${item.workers ? ` — ${item.workers} pekerja` : ""}`).join("\n");
+    const changes = report?.reportType === "WORKER_AVAILABILITY_CHANGED" ? [`• Pekerja: ${previousWorkers} → ${proposedWorkers} orang`, previousMinutes && proposedMinutes ? `• Estimasi panen: ${formatHours(previousMinutes)} → ${formatHours(proposedMinutes)}` : null].filter(Boolean).join("\n") : null;
+    const reasons = preview.recommendation.reasons.map((reason) => `• ${escapeHtml(localizePlanText(reason.text))}`).join("\n");
+    const text = `<b>🔄 Usulan perubahan rencana</b>\n${escapeHtml(missionName)}${changes ? `\n\n<b>Perubahan kondisi</b>\n${changes}` : ""}\n\n<b>Dampak</b>\nRencana aktif perlu disesuaikan dengan kondisi terbaru. Usulan ini telah diperiksa terhadap jam kerja dan batas waktu misi.\n\n<b>Jadwal yang diusulkan</b>\n${activities}\n\n<b>Alasan utama</b>\n${reasons}\n\nKegiatan yang sudah selesai tidak akan diubah.\n<b>Belum ada perubahan yang diterapkan.</b>`;
+    try { const sent = await this.api<{ message_id: number }>("sendMessage", { chat_id: chatId, reply_to_message_id: replyTo, text, parse_mode: "HTML", reply_markup: decisionKeyboard(token, "Setujui Replan") }); await this.repository.bindActionMessage(pending.telegramActionId, String(sent.message_id)); }
     catch (error) { await this.repository.deleteAction(pending.telegramActionId); throw error; }
   }
 
   private answer(callbackQueryId: string, text: string, showAlert = false) { return this.api("answerCallbackQuery", { callback_query_id: callbackQueryId, text, show_alert: showAlert }); }
+
+  private async bestEffort(stage: string, work: () => Promise<unknown>) {
+    try { await work(); }
+    catch (error) { console.warn("Telegram callback delivery failed", { stage, kind: error instanceof Error ? error.name : "unknown_error" }); }
+  }
 
   private async username() {
     if (this.botUsername) return this.botUsername;
@@ -279,7 +299,7 @@ export class TelegramService {
 }
 
 function escapeHtml(value: string) { return value.replace(/[&<>]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[character]!); }
-function decisionKeyboard(token: string) { return { inline_keyboard: [[{ text: "Setujui", callback_data: `action:${token}:approve` }, { text: "Tolak", callback_data: `action:${token}:reject` }]] }; }
+function decisionKeyboard(token: string, approve = "Setujui", reject = "Tolak") { return { inline_keyboard: [[{ text: approve, callback_data: `action:${token}:approve` }, { text: reject, callback_data: `action:${token}:reject` }]] }; }
 function commandHelp(intro = "Saya dapat membantu percakapan berikut:") {
   return `<b>Bantuan TUNAS</b>\n\n${escapeHtml(intro)}\n\n<b>Tanya</b>\n“Apa kegiatan berikutnya?”\n\n<b>Lapor</b>\n“Hujan mulai sekarang.”\n“Panen sudah selesai, hasilnya 80 kg.”\n\n<b>Rencana ulang</b>\n“Atur ulang jadwal karena hujan.”\n\n<b>Status</b>\n“Bagaimana status misi saya?”\n\n<b>Batal</b>\n“Batalkan laporan ini.”\n\nKetik <code>/bantuan</code> kapan saja untuk melihat contoh ini.`;
 }
@@ -292,14 +312,17 @@ function renderMissionStatus(mission: Awaited<ReturnType<TelegramRepository["own
   return `<b>Status misi aktif</b>\n\n<b>Misi:</b> ${escapeHtml(mission.originalMessage)}\n<b>Tahap:</b> ${escapeHtml(stageLabel(mission.stage))}\n<b>Progres:</b> ${completed} dari ${mission.missionSteps.length} kegiatan selesai${next ? `\n<b>Berikutnya:</b> ${escapeHtml(next.title)}, ${formatDate(next.startsOn)}` : ""}${targets ? `\n<b>Target:</b> ${targets}` : ""}`;
 }
 function stageLabel(stage: string) { return ({ WAITING: "Menunggu pelaksanaan", HARVESTING: "Panen", DRYING: "Pengeringan", FINISHED: "Pekerjaan selesai", TO_REVIEW: "Menunggu peninjauan" } as Record<string, string>)[stage] ?? stage; }
+function actionKindLabel(kind: string) { return ({ CONFIRM_READINESS_WEATHER: "Periksa kesiapan tanaman dan lahan", PREPARE_CREW_TOOLS: "Persiapan pekerja dan alat", PREPARE_HARVEST: "Persiapan panen", HARVEST: "Panen bawang merah", BUNDLE_COLLECT: "Kumpulkan hasil panen", COLLECT_AND_TRANSFER: "Kumpulkan dan pindahkan hasil", TRANSFER_TO_DRYING: "Pindahkan hasil ke area pengeringan", SET_UP_DRYING: "Siapkan area pengeringan", BEGIN_DRYING: "Mulai pengeringan", TURN_OR_REARRANGE: "Balik dan tata ulang hasil", INSPECT_DRYING: "Periksa kondisi pengeringan", DEPLOY_RAIN_PROTECTION: "Pasang perlindungan hujan", REMOVE_RAIN_PROTECTION: "Lepas perlindungan hujan", PROTECT_FROM_RAIN: "Lindungi dari hujan", CONFIRM_DRYING_COMPLETE: "Konfirmasi pengeringan selesai" } as Record<string, string>)[kind] ?? "Kegiatan operasional"; }
 function formatDate(value: Date | string) { return new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(value)); }
+function formatHours(minutes: number) { return `${new Intl.NumberFormat("id-ID", { maximumFractionDigits: 2 }).format(minutes / 60)} jam`; }
+function activityMoment(activity: { startsOn: Date | string; windowStart: string | null; windowEnd: string | null }) { return `${formatDate(activity.startsOn)}${activity.windowStart ? `, ${activity.windowStart}${activity.windowEnd ? `–${activity.windowEnd}` : ""} WIB` : ""}`; }
 function reportLabel(type: string) { return ({ ACTIVITY_STARTED: "Kegiatan dimulai", ACTIVITY_COMPLETED: "Kegiatan selesai", ACTUAL_QUANTITY_REPORTED: "Jumlah aktual", WORKER_AVAILABILITY_CHANGED: "Ketersediaan pekerja", BUYER_REQUIREMENT_CHANGED: "Kebutuhan pembeli", DRYING_RESOURCE_CHANGED: "Sumber daya pengeringan", RAIN_OR_FIELD_EVENT: "Hujan atau kejadian lapangan", MISSION_DEVIATION: "Penyimpangan misi", GENERAL_OPERATIONAL_NOTE: "Catatan operasional" } as Record<string, string>)[type] ?? type; }
 function localizePlanText(value: string) { return value.replace(/Candidate\s+(\d+)/gi, "Pilihan $1").replace(/Harvest shallots/gi, "Panen bawang merah").replace(/Begin and inspect drying/gi, "Mulai dan periksa pengeringan").replace(/Harvest starts ([^;]+); drying follows harvest\./gi, "Panen dimulai $1; pengeringan dilakukan setelah panen.").replace(/Zero percent precipitation probability minimizes harvest risk\./gi, "Peluang hujan nol persen meminimalkan risiko panen."); }
 function reportDetails(report: { reportType?: string; payload?: unknown }) {
   const payload = report.payload as Record<string, unknown> | undefined; if (!payload) return [];
   if (report.reportType === "ACTUAL_QUANTITY_REPORTED") return [`Jumlah: ${payload.quantityKg} kg`];
-  if (report.reportType === "WORKER_AVAILABILITY_CHANGED") return [`Pekerja tersedia: ${payload.availableWorkers} orang`];
-  if (report.reportType === "BUYER_REQUIREMENT_CHANGED") return [`Target: ${payload.targetQuantityKg} kg ${payload.quantityBasis === "HARVESTED" ? "panen" : "kering"}`, payload.deadline ? `Tenggat: ${payload.deadline}` : ""].filter(Boolean);
+  if (report.reportType === "WORKER_AVAILABILITY_CHANGED") return [`Pekerja tersedia: ${payload.availableWorkers} orang`, payload.estimatedHarvestMinutes ? `Estimasi panen: ${Number(payload.estimatedHarvestMinutes) / 60} jam` : ""].filter(Boolean);
+  if (report.reportType === "BUYER_REQUIREMENT_CHANGED") return [`Target: ${payload.targetQuantityKg} kg ${payload.quantityBasis === "HARVESTED" ? "panen" : "kering"}`, payload.buyerPickupAt ? `Pengambilan pembeli: ${payload.buyerPickupAt}` : ""].filter(Boolean);
   if (report.reportType === "DRYING_RESOURCE_CHANGED") return [`Area pengeringan: ${payload.available ? "tersedia" : "tidak tersedia"}`, `Perlindungan hujan: ${payload.protectionAvailable ? "tersedia" : "tidak tersedia"}`];
   if (report.reportType === "RAIN_OR_FIELD_EVENT") return [`Kejadian: ${payload.event}`];
   if (report.reportType === "MISSION_DEVIATION") return [`Keterangan: ${payload.description}`];
@@ -312,7 +335,8 @@ function renderOperationalState(state: TunasState) {
   if (pending.kind === "CLARIFICATION") return `<b>Perlu klarifikasi</b>\n\n${escapeHtml(String((pending.preview as { question?: unknown }).question ?? state.message))}`;
   if (pending.status !== "PENDING") {
     const title = pending.status === "APPROVED" ? "Laporan disimpan" : pending.status === "REJECTED" ? "Laporan ditolak" : pending.status === "STALE" ? "Data misi berubah" : pending.status === "SUPERSEDED" ? "Laporan digantikan" : "Laporan diproses";
-    const impact = state.impact ? `\n\n<b>Dampak:</b> ${state.impact.level === "MATERIAL" ? "Material" : "Tidak material"}${state.impact.reasons.length ? `\n${state.impact.reasons.map((reason) => `• ${escapeHtml(reason)}`).join("\n")}` : ""}` : "";
+    if (pending.status === "APPROVED" && state.impact?.replanSupported) return `<b>✅ ${title}</b>\n\nPerubahan operasional telah dicatat. Kondisi ini memengaruhi kegiatan yang belum selesai.\n\nTUNAS sedang menyiapkan usulan jadwal baru. <b>Belum ada perubahan yang diterapkan.</b>`;
+    const impact = state.impact?.level === "MATERIAL" ? "\n\nKondisi ini perlu diperhatikan, tetapi TUNAS belum memiliki cukup dasar untuk mengubah jadwal secara otomatis." : "";
     return `<b>${title}</b>\n\n${pending.status === "APPROVED" ? "Data operasional telah dicatat." : pending.status === "STALE" ? "Laporan tidak disimpan karena kondisi misi berubah. Kirim laporan baru jika masih berlaku." : "Rencana aktif tidak berubah."}${impact}`;
   }
   const report = (pending.preview as { after?: unknown }).after as { reportType?: string; observedAt?: string; payload?: unknown; narrative?: string } | undefined;

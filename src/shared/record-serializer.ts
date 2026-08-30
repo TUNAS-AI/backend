@@ -1,6 +1,7 @@
 const dateOnlyFields = new Set(["plantingDate", "startsOn", "endsOn"]);
 
 function serialize(value: unknown, key?: string): unknown {
+  if (typeof value === "bigint") return value.toString();
   if (value instanceof Date) return key && dateOnlyFields.has(key) ? value.toISOString().slice(0, 10) : value.toISOString();
   if (Array.isArray(value)) return value.map((item) => serialize(item));
   if (typeof value === "object" && value !== null) {

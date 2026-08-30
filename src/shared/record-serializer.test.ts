@@ -9,3 +9,7 @@ test("serializes mission schedule dates as date-only values", () => {
 
   assert.deepEqual(serialized.missionSteps[0], { startsOn: "2026-07-20", endsOn: "2026-07-22" });
 });
+
+test("serializes database bigint identifiers as strings", () => {
+  assert.deepEqual(serializeRecord({ operationalEventId: 42n }), { operationalEventId: "42" });
+});

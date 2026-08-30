@@ -72,6 +72,31 @@ test("routes Telegram operational reports to a bound approval preview", async ()
   assert.match(JSON.stringify(requests), /Tinjau laporan operasional/);
 });
 
+test("keeps A07/A08 Telegram templates human-readable", () => {
+  const service = readFileSync("src/features/telegram/telegram.service.ts", "utf8");
+  assert.match(service, /TUNAS sedang menyiapkan usulan jadwal baru/);
+  assert.match(service, /Belum ada perubahan yang diterapkan/);
+  assert.match(service, /Setujui Replan/);
+  assert.match(service, /CONFIRM_READINESS_WEATHER: "Periksa kesiapan tanaman dan lahan"/);
+  assert.match(service, /TRANSFER_TO_DRYING: "Pindahkan hasil ke area pengeringan"/);
+  assert.match(service, /recommendation\.reasons\.map\(\(reason\) => `• \$\{escapeHtml\(localizePlanText\(reason\.text\)\)\}`\)/);
+  assert.doesNotMatch(service, /recommendation\.reasons\.join/);
+  assert.doesNotMatch(service, /escapeHtml\(reason\)/);
+});
+
+test("does not reopen completed decisions after Telegram delivery failures", () => {
+  const service = readFileSync("src/features/telegram/telegram.service.ts", "utf8");
+  assert.match(service, /consumeAction[\s\S]+answer callback[\s\S]+handleAction/);
+  assert.match(service, /Keputusan sedang diproses/);
+  assert.match(service, /await this\.handleAction[\s\S]+catch \(error\) \{\s+await this\.repository\.releaseAction/);
+  assert.match(service, /await this\.bestEffort\("answer callback"/);
+  assert.match(service, /await this\.bestEffort\("remove callback buttons"/);
+  assert.match(service, /await this\.bestEffort\("send report decision"/);
+  assert.match(service, /send replan decision fallback/);
+  assert.match(service, /Laporan sudah disimpan, tetapi usulan jadwal baru belum berhasil dibuat/);
+  assert.equal((service.match(/releaseAction\(/g) ?? []).length, 1);
+});
+
 test("persists only the active replan clarification transcript", async () => {
   let payload: unknown; const requests: Array<Record<string, unknown>> = [];
   const repository = { identity: async () => ({ userId: "owner", telegramConnectionId: "connection", telegramChatId: "7" }), openOperationalPending: async () => null, openReplanClarification: async () => ({ telegramActionId: "clarification", missionId: "mission", payload: { messages: ["Atur ulang karena hujan"] } }), updateActionPayload: async (_id: string, value: unknown) => { payload = value; } };
@@ -86,11 +111,12 @@ test("persists only the active replan clarification transcript", async () => {
 
 test("uses the shared structured runtime for grounded Indonesian conversation", async () => {
   let prompt = "";
-  const output = { title: "Prioritas", summary: "Misi pengeringan paling mendesak karena jadwalnya besok.", facts: ["Tahap: pengeringan"], suggestions: ["Siapkan penutup."], clarification: null };
+  const output = { title: "Prioritas", answer: "Misi pengeringan paling mendesak karena jadwalnya besok.", listTitle: "Yang perlu disiapkan:", items: ["Siapkan penutup."], details: ["Tahap: pengeringan"], clarification: null };
   const answerer = createTelegramAnswerer(() => ({ withStructuredOutput: () => ({ invoke: async (messages: Array<{ content: unknown }>) => { prompt = messages.map((message) => String(message.content)).join("\n"); return output; } }) }));
   assert.deepEqual(await answerer({ question: "Mana yang mendesak?", context: { missions: [{ status: "ACTIVE" }] } }), output);
   assert.doesNotMatch(prompt, /Bahas misi|RIWAYAT/);
   assert.match(prompt, /Bedakan fakta tersimpan dari saran/);
+  assert.match(prompt, /Jangan membuat bagian "Fakta utama" atau "Saran"/);
   assert.match(prompt, /Mana yang mendesak/);
 });
 
@@ -113,10 +139,10 @@ test("routes obvious reports without loading context, history, or the model", as
 test("LangGraph loads authoritative context without conversation history", async () => {
   let received: { question: string; context: unknown; guidance?: string } | undefined;
   const repository = { queryContext: async (farmId: string) => ({ name: "Kebun Makmur", farmId, missions: [] }), recentConversation: async (_farmId: string, channel: string, limit: number) => [{ role: "user", content: `${channel}:${limit}` }] } as unknown as TunasRepository;
-  const graph = buildTelegramQueryGraph(repository, async (input) => { received = input; return { title: "Pilihan", summary: "Mari bandingkan dua pilihan itu.", facts: [], suggestions: ["Tinjau jadwal."], clarification: null }; }, async () => ({ intent: "ADVISORY" }));
+  const graph = buildTelegramQueryGraph(repository, async (input) => { received = input; return { title: "Pilihan", answer: "Mari bandingkan dua pilihan itu.", listTitle: null, items: ["Tinjau jadwal."], details: [], clarification: null }; }, async () => ({ intent: "ADVISORY" }));
   const result = await graph.invoke({ farmId: "farm-1", question: "Bagaimana kalau panen ditunda?" });
   assert.match(result.answer, /<b>Pilihan<\/b>/);
-  assert.match(result.answer, /<b>Saran<\/b>/);
+  assert.match(result.answer, /• Tinjau jadwal\./);
   assert.deepEqual(received, { question: "Bagaimana kalau panen ditunda?", context: { name: "Kebun Makmur", farmId: "farm-1", missions: [] }, guidance: "Berikan beberapa pilihan praktis; pisahkan setiap saran dari fakta tersimpan." });
   assert.equal(result.intent, "ADVISORY");
   assert.equal(result.routingSource, "AI");
@@ -159,11 +185,12 @@ test("uses a grounded deterministic fallback when answer generation fails", asyn
 });
 
 test("renders readable Telegram HTML and escapes all model content", () => {
-  const message = renderTelegramAnswer({ title: "Panen <utama>", summary: "Aman & terjadwal.", facts: ["Progres: 1 < 3"], suggestions: ["Bandingkan A & B"], clarification: "Pilih petak > 1?" });
-  assert.match(message, /^<b>Panen &lt;utama&gt;<\/b>/);
-  assert.match(message, /<b>Fakta utama<\/b>\n• Progres: 1 &lt; 3/);
-  assert.match(message, /<b>Saran<\/b>\n• Bandingkan A &amp; B/);
-  assert.match(message, /<b>Perlu klarifikasi<\/b>/);
+  const message = renderTelegramAnswer({ title: "🌱 Panen <utama>", answer: "Aman & terjadwal.", listTitle: "Persiapan:", items: ["Bandingkan A & B"], details: ["Progres: 1 < 3"], clarification: "Pilih petak > 1?" });
+  assert.match(message, /^<b>🌱 Panen &lt;utama&gt;<\/b>/);
+  assert.match(message, /<b>Persiapan:<\/b>\n• Bandingkan A &amp; B/);
+  assert.match(message, /Progres: 1 &lt; 3/);
+  assert.match(message, /Pilih petak &gt; 1\?/);
+  assert.doesNotMatch(message, /Fakta utama|<b>Saran<\/b>|Perlu klarifikasi/);
   assert.doesNotMatch(message, /<utama>/);
 });
 
