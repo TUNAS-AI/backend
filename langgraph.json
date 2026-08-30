@@ -4,7 +4,8 @@
   "graphs": {
     "mission-interpreter": "./src/agent/missions/mission-agent.ts:missionInterpretationGraph",
     "mission-planner": "./src/agent/missions/mission-agent.ts:missionPlanningGraph",
-    "mission-closeout": "./src/agent/missions/mission-agent.ts:missionCloseoutGraph"
+    "mission-closeout": "./src/agent/missions/mission-agent.ts:missionCloseoutGraph",
+    "operational-agent": "./src/agent/operational-agent.ts:operationalGraph"
   },
   "node_version": "24",
   "env": ".env"

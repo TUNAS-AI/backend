@@ -6,8 +6,15 @@ planning. Planning previews remain in the client until a farmer confirms a
 weather-aware plan, which creates an active `WAITING` mission. Farmers advance
 through harvest, drying, finished, and review before recording closeout metrics
 and reviewing the AI summary. A separate farmer confirmation completes the
-mission. Activities are stored as TUNAS schedules; Google Calendar writes,
-rescheduling, and automated monitoring remain deferred.
+mission. Activities are stored as TUNAS schedules and optionally mirrored to
+Google Calendar. Scheduled triggers are accepted, but deployment scheduling is external.
+
+Phase 3 adds durable, transport-neutral operational interactions backed by
+Postgres and LangGraph checkpoints. It supports grounded mission queries and
+append-only typed operational reports with explicit preview and approval.
+Phase 4 begins with permanent web-to-Telegram identity linking and mission-bound
+rain alerts. Telegram replanning remains an explicit MVP simulation and never
+changes a mission schedule.
 
 ## Run locally
 
@@ -76,8 +83,11 @@ npm test
 
 ## LangGraph Studio
 
-`langgraph.json` exports `mission-interpreter`, `mission-planner`, and
-`mission-closeout` from the same code used by the API. Set the OpenCode
+`langgraph.json` exports `mission-interpreter`, `mission-planner`,
+`mission-closeout`, and the Phase 3 `operational-agent` topology from the same
+code used by the API. Studio supplies checkpoint persistence for its graph
+runtime; API production startup requires `DATABASE_URL` and initializes the
+official LangGraph Postgres saver rather than falling back to volatile memory. Set the OpenCode
 variables above and a `LANGSMITH_API_KEY` in `backend/.env`, then start Studio
 from `backend/` with:
 
@@ -114,6 +124,55 @@ All endpoints require a Supabase bearer token. Call them in this order:
 4. Advance stages with `POST /api/missions/:id/stage`, and progress each current-stage step with `POST /api/missions/:id/steps/:stepId/status`
 5. After all steps are complete, advance to `TO_REVIEW`; the mission enters `CLOSEOUT`
 6. `POST /api/missions/:id/closeout`, then `POST /api/missions/:id/closeout/confirm`
+
+## Telegram alerts
+
+Set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `NGROK_AUTHTOKEN`, and
+`NGROK_DOMAIN`. `NGROK_DOMAIN` may be a hostname or HTTPS URL and must belong to
+the configured ngrok account. On backend startup, TUNAS starts `ngrok http 3000`
+and registers `${NGROK_DOMAIN}/api/telegram/webhook` with Telegram. The ngrok CLI
+must be installed on the backend host.
+
+An authenticated farmer connects once from the Farm page. The backend creates a
+10-minute one-time token, stores only its SHA-256 hash, and binds the Telegram
+private chat after `/start`. The stored connection has no MVP disconnect action.
+Each active mission with pending harvest or drying work exposes a rain-alert demo
+button. The resulting Indonesian Telegram alert is bound to its user, farm,
+mission, chat, Telegram message, opaque action token, and 15-minute expiry. The
+`Rencanakan ulang (demo)` callback is single-use and only reports a simulation;
+it does not mutate mission state.
+
+`POST /api/tunas/daily-check` remains the externally scheduled trigger. It uses
+hourly precipitation strictly above `0.1 mm`, exact mission date/window overlap,
+and saved weather snapshots to suppress unchanged or irrelevant forecasts.
+
+## Operational API
+
+`GET /api/tunas/interactions` returns completed durable conversation history.
+`POST /api/tunas/interactions` accepts exactly one of `message` or `report`, plus
+`missionId?`, `channel?`, and `externalMessageId?`. A structured report has
+`reportType`, ISO `observedAt`, a strict report-specific `payload`, and optional
+`missionStepId`, `fieldBlockId`, `cropBatchId`, `narrative`, and
+`supersedesReportId`. Structured reports bypass AI but use the same checkpointed
+preview and approval graph as extracted natural language.
+`channel` defaults to `web`; `externalMessageId` may instead be supplied in the
+`Idempotency-Key` header. The unique `(farm, channel, externalMessageId)` identity
+returns the stored `TunasState` on retries. Pending responses include
+`pendingActionId`, `kind`, `status`, `preview.before`, `preview.after`, and approve
+and reject endpoint paths.
+
+Approve or reject with `POST /api/tunas/pending/:pendingActionId/approve` and
+`POST /api/tunas/pending/:pendingActionId/reject`. Approval revalidates mission
+state and applies no mutation if stale. Clarification and approval are durable
+LangGraph interrupts; follow-up interactions and approve/reject actions resume
+the same checkpointed thread. Free-form routing uses bounded Gemini structured
+classification first and records a conservative deterministic fallback when the
+provider times out, fails, or returns invalid output. Read ordered audit events with
+`GET /api/tunas/missions/:id/timeline`; accepted report history is available at
+`GET /api/tunas/missions/:id/reports`. Approval returns deterministic `impact`
+(`NONE` or `MATERIAL`) and semantic actions when the existing replan flow can
+safely consume the changed fact. Use `channel: "scheduled"` with a stable
+external message ID to ingest a scheduled trigger; this service does not run a scheduler.
 
 `GET /health` is a liveness check. `GET /health/ready` verifies database access
 and required mission configuration without calling the model or weather provider.

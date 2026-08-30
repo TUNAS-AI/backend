@@ -13,6 +13,7 @@ import sessionRouter from "./features/auth/session.routes";
 import healthRouter from "./features/health/health.routes";
 import tunasRouter from "./features/tunas/tunas.routes";
 import googleCalendarRouter from "./features/google-calendar/google-calendar.routes";
+import telegramRouter from "./features/telegram/telegram.routes";
 
 const swaggerUi = require("swagger-ui-express");
 
@@ -42,6 +43,7 @@ app.use("/api/missions", missionRouter);
 app.use("/api/tunas", tunasRouter);
 app.use("/api/onboarding", onboardingRouter);
 app.use("/api/google-calendar", googleCalendarRouter);
+app.use("/api/telegram", telegramRouter);
 app.use("/api", sessionRouter);
 app.get("/api/openapi.json", (_request, response) => {
   response.json(openApiDocument);

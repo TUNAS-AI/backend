@@ -5,6 +5,11 @@ dotenv.config();
 const port = Number(process.env.PORT ?? 3000);
 const frontendUrl = (process.env.FRONTEND_URL ?? "http://localhost:5173").trim().replace(/\/$/, "");
 const googleCalendarRedirectUri = process.env.GOOGLE_CALENDAR_REDIRECT_URI?.trim() || null;
+const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN?.trim() || null;
+const telegramWebhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET?.trim() || null;
+const ngrokAuthToken = process.env.NGROK_AUTHTOKEN?.trim() || null;
+const ngrokDomainValue = process.env.NGROK_DOMAIN?.trim().replace(/\/$/, "") || null;
+const ngrokDomain = ngrokDomainValue ? (/^https?:\/\//i.test(ngrokDomainValue) ? ngrokDomainValue : `https://${ngrokDomainValue}`) : null;
 
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error("PORT must be an integer between 1 and 65535");
@@ -18,6 +23,10 @@ try {
 
 if (googleCalendarRedirectUri) {
   try { new URL(googleCalendarRedirectUri); } catch { throw new Error("GOOGLE_CALENDAR_REDIRECT_URI must be an absolute URL"); }
+}
+
+if (ngrokDomain) {
+  try { if (new URL(ngrokDomain).protocol !== "https:") throw new Error(); } catch { throw new Error("NGROK_DOMAIN must be an absolute HTTPS URL"); }
 }
 
 export const env = {
@@ -34,4 +43,8 @@ export const env = {
   googleCalendarRedirectUri,
   googleOauthStateSecret: process.env.GOOGLE_OAUTH_STATE_SECRET?.trim() || null,
   appEncryptionKey: process.env.APP_ENCRYPTION_KEY?.trim() || null,
+  telegramBotToken,
+  telegramWebhookSecret,
+  ngrokAuthToken,
+  ngrokDomain,
 };

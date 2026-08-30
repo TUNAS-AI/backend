@@ -58,7 +58,7 @@ export class MissionRepository {
       const existingSteps = await tx.missionStep.findMany({ where: { missionId: input.missionId }, orderBy: { sequence: "asc" } });
       const completed = existingSteps.filter((step) => step.status === "COMPLETED");
       const stage = completed.some((step) => step.stage === "DRYING") ? "FINISHED" : completed.some((step) => step.stage === "HARVESTING") ? "DRYING" : "WAITING";
-      const changed = await tx.mission.updateMany({ where: { missionId: input.missionId, farmId: input.farmId, status: "ACTIVE", approvedPlanId: input.expectedPlanId, updatedAt: input.expectedUpdatedAt }, data: { stage } });
+      const changed = await tx.mission.updateMany({ where: { missionId: input.missionId, farmId: input.farmId, status: "ACTIVE", approvedPlanId: input.expectedPlanId, updatedAt: input.expectedUpdatedAt }, data: { stage, revision: { increment: 1 } } });
       if (!changed.count) throw new Error("stale-mission");
       await tx.mission.update({ where: { missionId: input.missionId }, data: {
         fieldBlockId: input.facts.fieldBlockId, notes: input.facts.notes,
@@ -77,13 +77,17 @@ export class MissionRepository {
   }
 
   async advance(farmId: string, missionId: string, expectedStage: string, stage: string, status: string) {
-    const result = await getPrisma().mission.updateMany({ where: { farmId, missionId, status: "ACTIVE", stage: expectedStage }, data: { stage, status } });
+    const result = await getPrisma().mission.updateMany({ where: { farmId, missionId, status: "ACTIVE", stage: expectedStage }, data: { stage, status, revision: { increment: 1 } } });
     return result.count === 1 ? this.find(farmId, missionId) : null;
   }
 
   async updateStepStatus(farmId: string, missionId: string, stepId: string, expectedStatus: string, status: string) {
-    const result = await getPrisma().missionStep.updateMany({ where: { missionStepId: stepId, missionId, status: expectedStatus, mission: { farmId } }, data: { status } });
-    return result.count === 1 ? this.find(farmId, missionId) : null;
+    const changed = await getPrisma().$transaction(async (tx) => {
+      const result = await tx.missionStep.updateMany({ where: { missionStepId: stepId, missionId, status: expectedStatus, mission: { farmId } }, data: { status } });
+      if (result.count === 1) await tx.mission.update({ where: { missionId }, data: { revision: { increment: 1 } } });
+      return result.count;
+    });
+    return changed === 1 ? this.find(farmId, missionId) : null;
   }
 
   async recordCloseout(farmId: string, missionId: string, values: { actualHarvestKg: number; actualDriedKg: number; harvestedAreaHectares: number | null; dryingCompleted: boolean; rejectedKg: number | null; notes: string | null; plannedHarvestKg: number; plannedDriedKg: number }) {
@@ -91,12 +95,13 @@ export class MissionRepository {
       const mission = await tx.mission.findFirst({ where: { farmId, missionId, status: "CLOSEOUT", stage: "TO_REVIEW" } });
       if (!mission) return null;
       await tx.missionCloseout.create({ data: { missionId, ...values } });
+      await tx.mission.update({ where: { missionId }, data: { revision: { increment: 1 } } });
       return tx.mission.findUniqueOrThrow({ where: { missionId }, include: details });
     }) as unknown as MissionRecord);
   }
 
   async confirmCloseout(farmId: string, missionId: string) {
-    const result = await getPrisma().mission.updateMany({ where: { farmId, missionId, status: "CLOSEOUT", stage: "TO_REVIEW", closeout: { isNot: null } }, data: { status: "COMPLETED", stage: "COMPLETED" } });
+    const result = await getPrisma().mission.updateMany({ where: { farmId, missionId, status: "CLOSEOUT", stage: "TO_REVIEW", closeout: { isNot: null } }, data: { status: "COMPLETED", stage: "COMPLETED", revision: { increment: 1 } } });
     return result.count === 1 ? this.find(farmId, missionId) : null;
   }
 }

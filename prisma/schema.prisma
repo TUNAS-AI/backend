@@ -26,8 +26,10 @@ model User {
   timezone    String   @default("Asia/Jakarta") @db.Text
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
-  authUser    AuthUser @relation("AuthUserProfile", fields: [id], references: [id], onDelete: Cascade)
-  farm        Farm?
+  authUser           AuthUser            @relation("AuthUserProfile", fields: [id], references: [id], onDelete: Cascade)
+  farm               Farm?
+  telegramConnection TelegramConnection?
+  telegramLinkToken  TelegramLinkToken?
 
   @@map("users")
   @@schema("public")
@@ -52,9 +54,64 @@ model Farm {
   missions                  Mission[]
   tunasMessages             TunasMessage[]
   tunasForecastChecks       TunasForecastCheck[]
+  operationalThreads        OperationalThread[]
+  operationalInteractions   OperationalInteraction[]
+  pendingActions            PendingAction[]
+  operationalEvents         OperationalEvent[]
+  operationalReports        OperationalReport[]
   googleCalendarConnection  GoogleCalendarConnection?
+  telegramActions           TelegramAction[]
 
   @@map("farms")
+  @@schema("public")
+}
+
+model TelegramConnection {
+  telegramConnectionId String   @id @default(uuid()) @map("telegram_connection_id") @db.Uuid
+  userId               String   @unique @map("user_id") @db.Uuid
+  telegramUserId       String   @unique @map("telegram_user_id") @db.Text
+  telegramChatId       String   @unique @map("telegram_chat_id") @db.Text
+  telegramUsername     String?  @map("telegram_username") @db.Text
+  telegramFirstName    String?  @map("telegram_first_name") @db.Text
+  linkedAt             DateTime @default(now()) @map("linked_at") @db.Timestamptz(6)
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  actions              TelegramAction[]
+
+  @@map("telegram_connections")
+  @@schema("public")
+}
+
+model TelegramLinkToken {
+  telegramLinkTokenId String   @id @default(uuid()) @map("telegram_link_token_id") @db.Uuid
+  userId              String   @unique @map("user_id") @db.Uuid
+  tokenHash           String   @unique @map("token_hash") @db.Text
+  expiresAt           DateTime @map("expires_at") @db.Timestamptz(6)
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("telegram_link_tokens")
+  @@schema("public")
+}
+
+model TelegramAction {
+  telegramActionId     String             @id @default(uuid()) @map("telegram_action_id") @db.Uuid
+  telegramConnectionId String             @map("telegram_connection_id") @db.Uuid
+  farmId               String             @map("farm_id") @db.Uuid
+  missionId            String             @map("mission_id") @db.Uuid
+  action                String             @db.Text
+  tokenHash             String             @unique @map("token_hash") @db.Text
+  telegramMessageId     String?            @map("telegram_message_id") @db.Text
+  expiresAt             DateTime           @map("expires_at") @db.Timestamptz(6)
+  consumedAt            DateTime?          @map("consumed_at") @db.Timestamptz(6)
+  createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  connection            TelegramConnection @relation(fields: [telegramConnectionId], references: [telegramConnectionId], onDelete: Cascade)
+  farm                  Farm               @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
+  mission               Mission            @relation(fields: [missionId], references: [missionId], onDelete: Cascade)
+
+  @@index([telegramConnectionId, expiresAt])
+  @@index([farmId, missionId])
+  @@map("telegram_actions")
   @@schema("public")
 }
 
@@ -85,6 +142,7 @@ model Mission {
   approvedPlanId  String?               @map("approved_plan_id") @db.Uuid
   createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+  revision        Int                   @default(1)
   farm            Farm                  @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
   fieldBlock      FieldBlock?           @relation("MissionFieldBlock", fields: [farmId, fieldBlockId], references: [farmId, fieldBlockId])
   cropBatches     MissionCropBatch[]    @relation("MissionCropBatches")
@@ -96,6 +154,12 @@ model Mission {
   plans           Plan[]
   missionSteps    MissionStep[]
   closeout        MissionCloseout?
+  operationalThreads      OperationalThread[]
+  operationalInteractions OperationalInteraction[]
+  pendingActions          PendingAction[]
+  operationalEvents       OperationalEvent[]
+  operationalReports      OperationalReport[]
+  telegramActions         TelegramAction[]
 
   @@index([farmId, createdAt])
   @@unique([farmId, missionId])
@@ -243,6 +307,7 @@ model MissionStep {
   googleCalendarEventId  String?  @map("google_calendar_event_id") @db.Text
   createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   mission                Mission  @relation(fields: [missionId], references: [missionId], onDelete: Cascade)
+  operationalReports     OperationalReport[]
 
   @@unique([missionId, sequence])
   @@map("mission_steps")
@@ -284,6 +349,7 @@ model FieldBlock {
   fieldObservations FieldObservation[] @relation("FieldBlockFieldObservations")
   weatherSnapshots  WeatherSnapshot[]
   missions          Mission[]          @relation("MissionFieldBlock")
+  operationalReports OperationalReport[]
 
   @@unique([farmId, name])
   @@unique([farmId, fieldBlockId])
@@ -306,6 +372,7 @@ model CropBatch {
   farm              Farm                @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
   fieldBlock        FieldBlock          @relation("FieldBlockCropBatches", fields: [farmId, fieldBlockId], references: [farmId, fieldBlockId], onDelete: Cascade)
   missionLinks      MissionCropBatch[]  @relation("MissionCropBatches")
+  operationalReports OperationalReport[]
 
   @@index([farmId, fieldBlockId])
   @@index([fieldBlockId])
@@ -360,8 +427,10 @@ model TunasMessage {
   content        String    @db.Text
   actions        Json      @default("[]") @db.JsonB
   dedupeKey      String?   @map("dedupe_key") @db.Text
-  readAt         DateTime? @map("read_at") @db.Timestamptz(6)
-  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  readAt           DateTime? @map("read_at") @db.Timestamptz(6)
+  telegramSentAt   DateTime? @map("telegram_sent_at") @db.Timestamptz(6)
+  telegramMessageId String?  @map("telegram_message_id") @db.Text
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   farm           Farm      @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
   mission        Mission?  @relation(fields: [missionId], references: [missionId], onDelete: Cascade)
 
@@ -380,5 +449,135 @@ model TunasForecastCheck {
 
   @@unique([farmId, forecastDate])
   @@map("tunas_forecast_checks")
+  @@schema("public")
+}
+
+model OperationalThread {
+  operationalThreadId String                   @id @default(uuid()) @map("operational_thread_id") @db.Uuid
+  farmId               String                   @map("farm_id") @db.Uuid
+  missionId            String?                  @map("mission_id") @db.Uuid
+  channel              String                   @db.Text
+  status               String                   @default("OPEN") @db.Text
+  version              Int                      @default(1)
+  createdAt            DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+  farm                 Farm                     @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
+  mission              Mission?                 @relation(fields: [missionId], references: [missionId], onDelete: Cascade)
+  interactions         OperationalInteraction[]
+  pendingActions       PendingAction[]
+  events               OperationalEvent[]
+
+  @@index([farmId, channel, updatedAt])
+  @@map("operational_threads")
+  @@schema("public")
+}
+
+model OperationalInteraction {
+  operationalInteractionId String             @id @default(uuid()) @map("operational_interaction_id") @db.Uuid
+  operationalThreadId      String             @map("operational_thread_id") @db.Uuid
+  farmId                   String             @map("farm_id") @db.Uuid
+  missionId                String?            @map("mission_id") @db.Uuid
+  channel                  String             @db.Text
+  externalMessageId        String             @map("external_message_id") @db.Text
+  message                  String             @db.Text
+  trigger                  String?            @db.Text
+  status                   String             @default("RECEIVED") @db.Text
+  response                 Json?              @db.JsonB
+  createdAt                DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  completedAt              DateTime?          @map("completed_at") @db.Timestamptz(6)
+  thread                   OperationalThread  @relation(fields: [operationalThreadId], references: [operationalThreadId], onDelete: Cascade)
+  farm                     Farm               @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
+  mission                  Mission?           @relation(fields: [missionId], references: [missionId], onDelete: Cascade)
+  pendingActions           PendingAction[]
+  events                   OperationalEvent[]
+  reports                  OperationalReport[]
+
+  @@unique([farmId, channel, externalMessageId])
+  @@index([operationalThreadId, createdAt])
+  @@map("operational_interactions")
+  @@schema("public")
+}
+
+model OperationalReport {
+  operationalReportId       String                 @id @default(uuid()) @map("operational_report_id") @db.Uuid
+  farmId                    String                 @map("farm_id") @db.Uuid
+  missionId                 String                 @map("mission_id") @db.Uuid
+  missionStepId             String?                @map("mission_step_id") @db.Uuid
+  fieldBlockId              String?                @map("field_block_id") @db.Uuid
+  cropBatchId               String?                @map("crop_batch_id") @db.Uuid
+  operationalInteractionId  String                 @map("operational_interaction_id") @db.Uuid
+  channel                   String                 @db.Text
+  reportType                String                 @map("report_type") @db.Text
+  observedAt                DateTime               @map("observed_at") @db.Timestamptz(6)
+  payload                   Json                   @db.JsonB
+  narrative                 String?                @db.Text
+  acceptedAt                DateTime               @default(now()) @map("accepted_at") @db.Timestamptz(6)
+  supersedesReportId        String?                @map("supersedes_report_id") @db.Uuid
+  createdAt                 DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  farm                      Farm                   @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
+  mission                   Mission                @relation(fields: [missionId], references: [missionId], onDelete: Cascade)
+  missionStep               MissionStep?           @relation(fields: [missionStepId], references: [missionStepId])
+  fieldBlock                FieldBlock?            @relation(fields: [fieldBlockId], references: [fieldBlockId])
+  cropBatch                 CropBatch?             @relation(fields: [cropBatchId], references: [cropBatchId])
+  interaction               OperationalInteraction @relation(fields: [operationalInteractionId], references: [operationalInteractionId])
+  supersedes                OperationalReport?     @relation("ReportCorrections", fields: [supersedesReportId], references: [operationalReportId])
+  corrections               OperationalReport[]    @relation("ReportCorrections")
+
+  @@index([farmId, missionId, acceptedAt])
+  @@index([missionStepId, acceptedAt])
+  @@index([supersedesReportId])
+  @@map("operational_reports")
+  @@schema("public")
+}
+
+model PendingAction {
+  pendingActionId         String                  @id @default(uuid()) @map("pending_action_id") @db.Uuid
+  operationalThreadId    String                  @map("operational_thread_id") @db.Uuid
+  operationalInteractionId String                @map("operational_interaction_id") @db.Uuid
+  farmId                 String                  @map("farm_id") @db.Uuid
+  missionId              String?                 @map("mission_id") @db.Uuid
+  kind                    String                  @db.Text
+  status                  String                  @default("PENDING") @db.Text
+  preview                 Json                    @db.JsonB
+  expectedState           Json?                   @map("expected_state") @db.JsonB
+  resolution              Json?                   @db.JsonB
+  version                 Int                     @default(1)
+  createdAt               DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  resolvedAt              DateTime?               @map("resolved_at") @db.Timestamptz(6)
+  thread                  OperationalThread       @relation(fields: [operationalThreadId], references: [operationalThreadId], onDelete: Cascade)
+  interaction             OperationalInteraction  @relation(fields: [operationalInteractionId], references: [operationalInteractionId], onDelete: Cascade)
+  farm                    Farm                    @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
+  mission                 Mission?                @relation(fields: [missionId], references: [missionId], onDelete: Cascade)
+  events                  OperationalEvent[]
+
+  @@index([operationalThreadId, status, createdAt])
+  @@index([farmId, status])
+  @@map("pending_actions")
+  @@schema("public")
+}
+
+model OperationalEvent {
+  operationalEventId       BigInt                  @id @default(autoincrement()) @map("operational_event_id")
+  operationalThreadId      String                  @map("operational_thread_id") @db.Uuid
+  operationalInteractionId String?                 @map("operational_interaction_id") @db.Uuid
+  pendingActionId          String?                 @map("pending_action_id") @db.Uuid
+  farmId                   String                  @map("farm_id") @db.Uuid
+  missionId                String?                 @map("mission_id") @db.Uuid
+  actor                    String                  @db.Text
+  channel                  String                  @db.Text
+  type                     String                  @db.Text
+  before                   Json?                   @db.JsonB
+  after                    Json?                   @db.JsonB
+  metadata                 Json?                   @db.JsonB
+  createdAt                DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  thread                   OperationalThread       @relation(fields: [operationalThreadId], references: [operationalThreadId], onDelete: Cascade)
+  interaction              OperationalInteraction? @relation(fields: [operationalInteractionId], references: [operationalInteractionId], onDelete: Cascade)
+  pendingAction            PendingAction?          @relation(fields: [pendingActionId], references: [pendingActionId], onDelete: Cascade)
+  farm                     Farm                    @relation(fields: [farmId], references: [farmId], onDelete: Cascade)
+  mission                  Mission?                @relation(fields: [missionId], references: [missionId], onDelete: Cascade)
+
+  @@index([missionId, createdAt, operationalEventId])
+  @@index([operationalThreadId, createdAt])
+  @@map("operational_events")
   @@schema("public")
 }
