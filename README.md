@@ -132,12 +132,17 @@ and caller-scoped `context`; planner expects `context`, `weather`, and
 `farmTimezone`; closeout expects `context`. Use fixture IDs and non-production
 farm data when invoking graphs directly in Studio.
 
-The interpreter uses Gemini `gemini-3.1-flash-lite` through LangChain to extract farmer-reported facts
-and ask one material clarification at a time. The planner receives only
-caller-scoped farm context, a normalized 72-hour Open-Meteo forecast, and the
-farmer-approved facts. It returns daily harvest windows and drying date ranges.
-Traditional shallot drying duration is always an AI estimate with a reason and
-weather-risk assumption, never a guaranteed agricultural outcome.
+The interpreter uses Gemini `gemini-3.1-flash-lite` through LangChain to extract
+the harvest-window start/end, exact buyer pickup timestamp, rain-risk priority,
+full/partial fulfillment rule, and other farmer-reported facts. The deterministic
+planner creates up to three distinct timed schedules with stable `actionKind`
+values for preparation, harvest, collection/transfer, drying start, next-day
+08:00 inspection, and rain protection when needed. Passive drying is mission
+state, not an all-day or multi-day calendar step. All actions use `DAILY_WINDOW`;
+point checkpoints use a consistent 15-minute window. Gemini only ranks supplied
+candidates from their complete activities and structured evidence, returning
+reason bullets that cite supplied evidence IDs; confirmation
+reloads weather and deterministically revalidates the selected schedule.
 
 ## Mission API happy path
 
@@ -190,7 +195,7 @@ the linked identity, farm, mission, chat, message, single-use token, and expiry.
 Ambiguous reports resume through a focused clarification. Approved reports are
 stored once with `channel: "telegram"` and then receive deterministic impact
 evaluation. Buyer changes require an explicit `HARVESTED` or `DRIED` quantity
-basis. Material buyer or rain reports offer a user-triggered replacement-plan
+basis and use `buyerPickupAt` for an exact ISO pickup timestamp. Material buyer or rain reports offer a user-triggered replacement-plan
 preview after report approval. Other reports remain authoritative evidence.
 The router never mutates data. On the report route, Gemini extracts a typed report
 with mission context and the server validates its schema, ownership, and state

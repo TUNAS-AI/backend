@@ -50,11 +50,14 @@ test("happy-path lifecycle constrains mission and step states", () => {
 test("range-based schedules and drying estimates are persisted", () => {
   const schema = readFileSync(resolve("prisma/schema.prisma"), "utf8");
   const sql = readFileSync(resolve("prisma/migrations/20260716140000_add_range_based_mission_schedules/migration.sql"), "utf8");
+  const conditionGateSql = readFileSync(resolve("prisma/migrations/20260829180000_allow_condition_gate_schedules/migration.sql"), "utf8");
   assert.match(schema, /dryingEstimateDays/);
   assert.match(schema, /scheduleType/);
   assert.match(schema, /startsOn/);
   assert.match(sql, /RENAME COLUMN start_at TO starts_on/i);
   assert.match(sql, /schedule_type_check/i);
+  assert.match(conditionGateSql, /plan_steps_schedule_type_check[\s\S]*'CONDITION_GATE'/i);
+  assert.match(conditionGateSql, /mission_steps_schedule_type_check[\s\S]*'CONDITION_GATE'/i);
 });
 
 test("scheduled harvest allocations are persisted for complete split plans", () => {
@@ -63,4 +66,13 @@ test("scheduled harvest allocations are persisted for complete split plans", () 
   assert.match(schema, /targetHarvestKg/);
   assert.match(sql, /plan_steps ADD COLUMN target_harvest_kg/i);
   assert.match(sql, /mission_steps ADD COLUMN target_harvest_kg/i);
+});
+
+test("mission scheduling v2 persists stable action kinds as text", () => {
+  const schema = readFileSync(resolve("prisma/schema.prisma"), "utf8");
+  const sql = readFileSync(resolve("prisma/migrations/20260829120000_add_mission_step_action_kind/migration.sql"), "utf8");
+  assert.match(schema, /actionKind\s+String\s+@map\("action_kind"\) @db.Text/);
+  assert.match(sql, /plan_steps ADD COLUMN action_kind text/i);
+  assert.match(sql, /mission_steps ADD COLUMN action_kind text/i);
+  assert.doesNotMatch(sql, /schedule_type/);
 });

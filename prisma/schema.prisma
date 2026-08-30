@@ -44,6 +44,8 @@ model Farm {
   timezone                  String                       @default("Asia/Jakarta") @db.Text
   defaultWorkingHours       Json?                        @map("default_working_hours") @db.JsonB
   defaultWorkerCount        Int                          @default(1) @map("default_worker_count")
+  dryingProfile             Json?                        @map("drying_profile") @db.JsonB
+  schedulingDurations       Json                         @default("{\"readinessCheckMinutes\":15,\"harvestMinutes\":360,\"transferToDryingMinutes\":30,\"beginDryingMinutes\":15,\"dryingInspectionMinutes\":30}") @map("scheduling_durations") @db.JsonB
   createdAt                 DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                 DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(6)
   owner                     User                         @relation(fields: [ownerId], references: [id], onDelete: Cascade)
@@ -232,6 +234,11 @@ model PlanningRun {
   status        String    @default("PENDING") @db.Text
   error         String?   @db.Text
   traceId       String?   @map("trace_id") @db.Text
+  inputSnapshot Json?     @map("input_snapshot") @db.JsonB
+  inputHash     String?   @map("input_hash") @db.Text
+  solverVersion String?   @map("solver_version") @db.Text
+  objectiveOrdering Json? @map("objective_ordering") @db.JsonB
+  tieBreakOrdering Json?  @map("tie_break_ordering") @db.JsonB
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   completedAt   DateTime? @map("completed_at") @db.Timestamptz(6)
   mission       Mission   @relation(fields: [missionId], references: [missionId], onDelete: Cascade)
@@ -269,6 +276,7 @@ model PlanStep {
   sequence      Int
   title         String   @db.Text
   description   String   @db.Text
+  actionKind    String   @map("action_kind") @db.Text
   scheduleType  String   @default("DAILY_WINDOW") @map("schedule_type") @db.Text
   startsOn      DateTime @map("starts_on") @db.Date
   endsOn        DateTime @map("ends_on") @db.Date
@@ -278,6 +286,9 @@ model PlanStep {
   isConditional Boolean  @default(false) @map("is_conditional")
   stage         String   @default("HARVESTING") @db.Text
   targetHarvestKg Decimal? @map("target_harvest_kg") @db.Decimal(14, 3)
+  quantityKg      Decimal? @map("quantity_kg") @db.Decimal(14, 3)
+  dependencies   Json      @default("[]") @db.JsonB
+  resourceDemands Json     @default("[]") @map("resource_demands") @db.JsonB
   calendarSyncStatus    String   @default("NOT_REQUESTED") @map("calendar_sync_status") @db.Text
   googleCalendarEventId String?  @map("google_calendar_event_id") @db.Text
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -295,6 +306,7 @@ model MissionStep {
   sequence               Int
   title                  String   @db.Text
   description            String   @db.Text
+  actionKind              String   @map("action_kind") @db.Text
   scheduleType           String   @default("DAILY_WINDOW") @map("schedule_type") @db.Text
   startsOn               DateTime @map("starts_on") @db.Date
   endsOn                 DateTime @map("ends_on") @db.Date
@@ -304,6 +316,12 @@ model MissionStep {
   isConditional          Boolean  @default(false) @map("is_conditional")
   stage                  String   @default("HARVESTING") @db.Text
   targetHarvestKg        Decimal? @map("target_harvest_kg") @db.Decimal(14, 3)
+  quantityKg             Decimal? @map("quantity_kg") @db.Decimal(14, 3)
+  dependencies           Json     @default("[]") @db.JsonB
+  resourceDemands        Json     @default("[]") @map("resource_demands") @db.JsonB
+  actualStartedAt        DateTime? @map("actual_started_at") @db.Timestamptz(6)
+  actualCompletedAt      DateTime? @map("actual_completed_at") @db.Timestamptz(6)
+  actualQuantityKg       Decimal? @map("actual_quantity_kg") @db.Decimal(14, 3)
   status                 String   @default("SCHEDULED") @db.Text
   calendarSyncStatus     String   @default("NOT_REQUESTED") @map("calendar_sync_status") @db.Text
   googleCalendarEventId  String?  @map("google_calendar_event_id") @db.Text
@@ -409,6 +427,9 @@ model WeatherSnapshot {
   fieldBlockId      String   @map("field_block_id") @db.Uuid
   source            String   @db.Text
   observedAt        DateTime @map("observed_at") @db.Timestamptz(6)
+  issuedAt          DateTime? @map("issued_at") @db.Timestamptz(6)
+  horizonStartsAt   DateTime? @map("horizon_starts_at") @db.Timestamptz(6)
+  horizonEndsAt     DateTime? @map("horizon_ends_at") @db.Timestamptz(6)
   payload           Json     @db.JsonB
   createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   farm              Farm     @relation(fields: [farmId], references: [farmId], onDelete: Cascade)

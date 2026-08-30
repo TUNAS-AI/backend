@@ -104,6 +104,7 @@ export class GoogleCalendarService {
         try { await this.deleteEvent(accessToken, connection.calendarId, step.googleCalendarEventId as string); await this.repository.clearSynced(step.planStepId, mission.missionId); } catch (error) { await this.repository.markFailed(step.planStepId, mission.missionId); failed += 1; failureReason ??= syncFailureMessage(error); this.logSyncFailure("delete", error); }
       }
       for (const step of approved.steps) {
+        if (step.scheduleType !== "DAILY_WINDOW") continue;
         try { const id = eventId(step.planStepId); await this.syncEvent(accessToken, connection.calendarId, id, calendarEventBody(mission.missionId, step), Boolean(step.googleCalendarEventId)); await this.repository.markSynced(step.planStepId, mission.missionId, id); synced += 1; } catch (error) { await this.repository.markFailed(step.planStepId, mission.missionId); failed += 1; failureReason ??= syncFailureMessage(error); this.logSyncFailure("write", error); }
       }
     }

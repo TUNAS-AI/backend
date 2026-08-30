@@ -97,6 +97,44 @@ test("does not reopen completed decisions after Telegram delivery failures", () 
   assert.equal((service.match(/releaseAction\(/g) ?? []).length, 1);
 });
 
+test("confirms an applied replan before waiting for Calendar synchronization", async () => {
+  const previousToken = env.telegramBotToken; env.telegramBotToken = "test-token";
+  const order: string[] = []; const sent: Array<Record<string, unknown>> = [];
+  const repository = {
+    action: async () => ({ telegramActionId: "action", action: "REPLAN_DECISION", farmId: "farm", missionId: "mission", telegramMessageId: "40", expiresAt: new Date(Date.now() + 60_000), consumedAt: null, payload: { previewToken: "preview", planId: "plan", summary: { missionName: "Panen Blok Utara" } }, connection: { userId: "owner", telegramUserId: "7", telegramChatId: "7" }, mission: { farmId: "farm" } }),
+    consumeAction: async () => true, releaseAction: async () => undefined, updateActionPayload: async () => undefined,
+  };
+  const missions = {
+    confirmReplan: async () => { order.push("confirm"); return { mission: {}, calendarSync: { status: "PENDING" } }; },
+    syncCalendar: async () => { order.push("calendar"); return null; },
+  };
+  const fetcher = async (_url: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>; sent.push(body);
+    if (body.text && String(body.text).includes("Replan disetujui")) order.push("message");
+    return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
+  };
+  try {
+    const service = new TelegramService(repository as never, fetcher as typeof fetch, {} as never, null, missions as never);
+    await service.webhook({ callback_query: { id: "callback", data: `action:${"a".repeat(20)}:approve`, from: { id: 7 }, message: { message_id: 40, chat: { id: 7, type: "private" } } } });
+    assert.deepEqual(order, ["confirm", "message", "calendar"]);
+    assert.match(JSON.stringify(sent), /Keputusan sedang diproses/);
+    assert.match(JSON.stringify(sent), /Replan disetujui/);
+  } finally { env.telegramBotToken = previousToken; }
+});
+
+test("replays a stored terminal result without applying the replan twice", async () => {
+  const previousToken = env.telegramBotToken; env.telegramBotToken = "test-token";
+  let confirms = 0; const sent: Array<Record<string, unknown>> = [];
+  const repository = { action: async () => ({ telegramActionId: "action", action: "REPLAN_DECISION", farmId: "farm", missionId: "mission", telegramMessageId: "40", expiresAt: new Date(Date.now() + 60_000), consumedAt: new Date(), payload: { terminalText: "Replan disetujui dan tersimpan." }, connection: { userId: "owner", telegramUserId: "7", telegramChatId: "7" }, mission: { farmId: "farm" } }) };
+  const fetcher = async (_url: string | URL | Request, init?: RequestInit) => { sent.push(JSON.parse(String(init?.body))); return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 }); };
+  try {
+    const service = new TelegramService(repository as never, fetcher as typeof fetch, {} as never, null, { confirmReplan: async () => { confirms++; } } as never);
+    await service.webhook({ callback_query: { id: "callback", data: `action:${"a".repeat(20)}:approve`, from: { id: 7 }, message: { message_id: 40, chat: { id: 7, type: "private" } } } });
+    assert.equal(confirms, 0);
+    assert.match(JSON.stringify(sent), /Replan disetujui dan tersimpan/);
+  } finally { env.telegramBotToken = previousToken; }
+});
+
 test("persists only the active replan clarification transcript", async () => {
   let payload: unknown; const requests: Array<Record<string, unknown>> = [];
   const repository = { identity: async () => ({ userId: "owner", telegramConnectionId: "connection", telegramChatId: "7" }), openOperationalPending: async () => null, openReplanClarification: async () => ({ telegramActionId: "clarification", missionId: "mission", payload: { messages: ["Atur ulang karena hujan"] } }), updateActionPayload: async (_id: string, value: unknown) => { payload = value; } };

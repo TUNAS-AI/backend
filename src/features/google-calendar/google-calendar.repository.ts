@@ -33,7 +33,7 @@ export class GoogleCalendarRepository {
       where: { farmId, status: "ACTIVE", approvedPlanId: { not: null } },
       select: {
         missionId: true, approvedPlanId: true,
-        plans: { select: { planId: true, steps: { select: { planStepId: true, sequence: true, title: true, description: true, scheduleType: true, startsOn: true, endsOn: true, windowStart: true, windowEnd: true, timezone: true, stage: true, targetHarvestKg: true, googleCalendarEventId: true }, orderBy: { sequence: "asc" } } } },
+        plans: { select: { planId: true, steps: { select: { planStepId: true, sequence: true, title: true, description: true, actionKind: true, scheduleType: true, startsOn: true, endsOn: true, windowStart: true, windowEnd: true, timezone: true, stage: true, targetHarvestKg: true, googleCalendarEventId: true }, orderBy: { sequence: "asc" } } } },
       },
     });
   }

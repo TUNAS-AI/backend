@@ -15,7 +15,7 @@ export class TelegramQueryService {
     const deterministic = deterministicTelegramRoute(message, activeWorkflow);
     if (deterministic) return deterministic;
     try { return await this.router({ message }); }
-    catch (error) { logTelegramRouteFailure(error); return { intent: "UNKNOWN" as const, continuation: false }; }
+    catch (error) { logTelegramRouteFailure(error); return deterministicTelegramRoute(message, activeWorkflow) ?? { intent: "UNKNOWN" as const, continuation: false }; }
   }
 
   async respond(ownerId: string, message: string, externalMessageId: string, responseMessage: string, trigger: string): Promise<TunasState> {

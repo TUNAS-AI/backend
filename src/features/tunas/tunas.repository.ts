@@ -22,8 +22,9 @@ export class TunasRepository {
   }
   async latestActiveMission(farmId: string) { return (await this.activeMissions(farmId))[0] ?? null; }
   async activeMission(farmId: string, missionId: string) { return getPrisma().mission.findFirst({ where: { farmId, missionId, status: "ACTIVE", missionSteps: { some: { status: { in: ["SCHEDULED", "IN_PROGRESS"] }, stage: { in: ["HARVESTING", "DRYING"] } } } }, include: { fieldBlock: true, missionSteps: { where: { status: { in: ["SCHEDULED", "IN_PROGRESS"] }, stage: { in: ["HARVESTING", "DRYING"] } }, orderBy: { sequence: "asc" } } } }); }
+  async activeDemoMission(farmId: string, missionId: string) { return getPrisma().mission.findFirst({ where: { farmId, missionId, status: "ACTIVE" }, include: { fieldBlock: true, missionSteps: { orderBy: { sequence: "asc" } } } }); }
   async latestWeather(farmId: string, fieldBlockId: string) { return getPrisma().weatherSnapshot.findFirst({ where: { farmId, fieldBlockId }, orderBy: { observedAt: "desc" } }); }
-  async saveWeather(farmId: string, fieldBlockId: string, payload: unknown) { await getPrisma().weatherSnapshot.create({ data: { farmId, fieldBlockId, source: "open-meteo-daily-check", observedAt: new Date(), payload: payload as Prisma.InputJsonValue } }); }
+  async saveWeather(farmId: string, fieldBlockId: string, payload: unknown, source = "open-meteo-daily-check") { await getPrisma().weatherSnapshot.create({ data: { farmId, fieldBlockId, source, observedAt: new Date(), payload: payload as Prisma.InputJsonValue } }); }
   async createMessage(input: { farmId: string; missionId?: string | null; kind: string; role?: string; content: string; actions?: TunasAction[]; dedupeKey?: string | null }) {
     const create = { ...input, actions: (input.actions ?? []) as Prisma.InputJsonValue };
     const value = input.dedupeKey
@@ -188,14 +189,17 @@ export class TunasRepository {
       if (report.fieldBlockId && report.fieldBlockId !== mission.fieldBlockId) throw new ApiError(409, "Report field does not belong to this mission");
       if (report.cropBatchId && !await tx.missionCropBatch.findUnique({ where: { missionId_cropBatchId: { missionId: mission.missionId, cropBatchId: report.cropBatchId } } })) throw new ApiError(409, "Report crop batch does not belong to this mission");
       if (report.supersedesReportId && !await tx.operationalReport.findFirst({ where: { operationalReportId: report.supersedesReportId, missionId: mission.missionId } })) throw new ApiError(409, "Superseded report does not belong to this mission");
-      const requestedStatus = report.reportType === "ACTIVITY_STARTED" ? "IN_PROGRESS" : report.reportType === "ACTIVITY_COMPLETED" ? "COMPLETED" : null;
+      const requestedStatus = report.reportType === "ACTIVITY_STARTED" ? "IN_PROGRESS" : report.reportType === "ACTIVITY_COMPLETED" || report.reportType === "DRYING_INSPECTION" && report.payload.decision === "COMPLETE" ? "COMPLETED" : null;
       const revision = await tx.mission.updateMany({ where: { missionId: mission.missionId, revision: input.expectedRevision }, data: { revision: { increment: 1 } } });
       if (!revision.count) return null;
       if (requestedStatus) {
         const step = mission.missionSteps.find((item) => item.missionStepId === report.missionStepId)!;
+        if (report.reportType === "ACTIVITY_COMPLETED" && step.actionKind === "CONFIRM_DRYING_COMPLETE") throw new ApiError(409, "Drying completion requires the structured farmer inspection checklist");
+        if (report.reportType === "DRYING_INSPECTION" && step.actionKind !== "CONFIRM_DRYING_COMPLETE") throw new ApiError(409, "Drying completion inspection must target the condition gate");
         if (mission.status !== "ACTIVE" || step.stage !== mission.stage || !isStepTransitionAllowed(step as never, requestedStatus, mission.missionSteps as never[])) throw new ApiError(409, "Reported activity transition is not allowed");
-        if (step.status !== requestedStatus) await tx.missionStep.update({ where: { missionStepId: step.missionStepId }, data: { status: requestedStatus } });
+        if (step.status !== requestedStatus) await tx.missionStep.update({ where: { missionStepId: step.missionStepId }, data: { status: requestedStatus, ...(requestedStatus === "IN_PROGRESS" ? { actualStartedAt: new Date(report.observedAt) } : { actualStartedAt: step.actualStartedAt ?? new Date(report.observedAt), actualCompletedAt: new Date(report.observedAt) }) } });
       }
+      if (report.reportType === "ACTUAL_QUANTITY_REPORTED" && report.missionStepId) await tx.missionStep.update({ where: { missionStepId: report.missionStepId }, data: { actualQuantityKg: report.payload.quantityKg } });
       const accepted = await tx.operationalReport.create({ data: { farmId: mission.farmId, missionId: mission.missionId, missionStepId: report.missionStepId, fieldBlockId: report.fieldBlockId, cropBatchId: report.cropBatchId, operationalInteractionId: pending.operationalInteractionId, channel: input.channel, reportType: report.reportType, observedAt: new Date(report.observedAt), payload: report.payload as Prisma.InputJsonValue, narrative: report.narrative, supersedesReportId: report.supersedesReportId } });
       const impact = reportImpact(report, mission);
       await tx.pendingAction.update({ where: { pendingActionId: pending.pendingActionId }, data: { status: "APPROVED", resolvedAt: new Date(), version: { increment: 1 }, resolution: { operationalReportId: accepted.operationalReportId, impact } as Prisma.InputJsonValue } });
@@ -216,10 +220,12 @@ export function reportImpact(report: OperationalReportInput, mission: { status: 
     if (typeof target === "number" && report.payload.quantityKg !== target) reasons.push("Actual quantity differs from target");
   }
   if (report.reportType === "DRYING_RESOURCE_CHANGED" && !report.payload.available) reasons.push("Drying resource is unavailable");
-  if (report.reportType === "WORKER_AVAILABILITY_CHANGED" && report.payload.availableWorkers === 0 && mission.missionSteps.some((step) => step.status === "IN_PROGRESS")) reasons.push("No workers are available during active work");
+  if (report.reportType === "DRYING_INSPECTION" && report.payload.decision !== "COMPLETE") reasons.push(report.payload.decision === "UNSAFE" ? "Drying inspection found unsafe deterioration" : "Drying remains incomplete");
+  if (report.reportType === "WORKER_AVAILABILITY_CHANGED" && mission.missionSteps.some((step) => step.status !== "COMPLETED" && step.stage === "HARVESTING")) reasons.push("Worker availability changed before remaining harvest work");
   if (report.reportType === "RAIN_OR_FIELD_EVENT") {
     const observed = report.payload.observedAt.slice(0, 10);
     if (mission.missionSteps.some((step) => step.status !== "COMPLETED" && ["HARVESTING", "DRYING"].includes(step.stage) && step.startsOn.toISOString().slice(0, 10) <= observed && step.endsOn.toISOString().slice(0, 10) >= observed)) reasons.push("Rain or field event overlaps remaining exposed work");
   }
-  return { level: reasons.length ? "MATERIAL" : "NONE", reasons, replanSupported: ["BUYER_REQUIREMENT_CHANGED", "RAIN_OR_FIELD_EVENT"].includes(report.reportType) && reasons.length > 0 && mission.status === "ACTIVE" };
+  const supported = ["BUYER_REQUIREMENT_CHANGED", "RAIN_OR_FIELD_EVENT"].includes(report.reportType) || report.reportType === "WORKER_AVAILABILITY_CHANGED" && Boolean(report.payload.estimatedHarvestMinutes);
+  return { level: reasons.length ? "MATERIAL" : "NONE", reasons, replanSupported: supported && reasons.length > 0 && mission.status === "ACTIVE" };
 }

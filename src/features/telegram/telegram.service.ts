@@ -18,7 +18,7 @@ export type TelegramUpdate = { update_id?: number; message?: TelegramMessage; ca
 export const telegramExternalMessageId = (updateId: number | undefined, chatId: number | string, messageId: number) => updateId === undefined ? `message:${chatId}:${messageId}` : `update:${updateId}`;
 type AlertInput = { ownerId: string; missionId: string; demo: boolean; change: string; activity: string; impact: string; recommendation: string; forecast?: { date: string; start: string; end: string; precipitation: number; probability: number } };
 type CallbackAction = { telegramActionId?: string; action: string; payload?: unknown; farmId: string; missionId?: string; telegramMessageId: string | null; expiresAt?: Date; consumedAt?: Date | null; connection: { userId?: string; telegramConnectionId?: string; telegramUserId: string; telegramChatId: string }; mission: { farmId: string } };
-type ReplanSummary = { missionName: string; workers?: number; harvest?: string; drying?: string };
+type ReplanSummary = { missionName: string; workers?: number; harvest?: string; drying?: string; changes?: Array<{ title: string; before: { date: string; start: string | null; end: string | null }; after: { date: string; start: string | null; end: string | null } }> };
 export function telegramCallbackAuthorized(action: CallbackAction | null, callback: TelegramCallback): action is CallbackAction { return Boolean(action && callback.message && action.connection.telegramUserId === String(callback.from.id) && action.connection.telegramChatId === String(callback.message.chat.id) && action.telegramMessageId === String(callback.message.message_id) && action.mission.farmId === action.farmId); }
 type OperationalApi = Pick<TunasService, "interact" | "approve" | "reject" | "cancel">;
 
@@ -167,7 +167,14 @@ export class TelegramService {
     if (!match || !callback.message) return;
     const action = await this.repository.action(telegramTokenHash(match[1]));
     if (!telegramCallbackAuthorized(action, callback)) { await this.answer(callback.id, "Tindakan tidak sah atau diteruskan dari chat lain.", true); return; }
-    if (action.consumedAt || action.expiresAt <= new Date()) { await this.answer(callback.id, "Tindakan sudah dipakai atau kedaluwarsa.", true); return; }
+    if (action.consumedAt || action.expiresAt <= new Date()) {
+      const terminalText = (action.payload as { terminalText?: unknown } | null)?.terminalText;
+      if (typeof terminalText === "string") {
+        await this.bestEffort("replay terminal result", () => this.api("sendMessage", { chat_id: callback.message!.chat.id, text: terminalText }));
+        await this.bestEffort("answer completed callback", () => this.answer(callback.id, "Keputusan sudah diproses."));
+      } else await this.answer(callback.id, "Tindakan sudah dipakai atau kedaluwarsa.", true);
+      return;
+    }
     const consumedAt = new Date();
     if (!await this.repository.consumeAction(action.telegramActionId, consumedAt)) { await this.answer(callback.id, "Tindakan sudah dipakai atau kedaluwarsa.", true); return; }
     await this.bestEffort("answer callback", () => this.answer(callback.id, "Keputusan sedang diproses."));
@@ -175,7 +182,7 @@ export class TelegramService {
       await this.handleAction(action, match[2] as "approve" | "reject" | "generate", callback.message);
     } catch (error) {
       await this.repository.releaseAction(action.telegramActionId, consumedAt);
-      await this.answer(callback.id, error instanceof ApiError ? error.message : "Tindakan belum dapat diproses. Coba lagi.", true);
+      await this.bestEffort("send callback failure", () => this.api("sendMessage", { chat_id: callback.message!.chat.id, reply_to_message_id: callback.message!.message_id, text: error instanceof ApiError ? error.message : "Tindakan belum dapat diproses. Coba lagi." }));
       return;
     }
     await this.bestEffort("remove callback buttons", () => this.api("editMessageReplyMarkup", { chat_id: callback.message!.chat.id, message_id: callback.message!.message_id, reply_markup: { inline_keyboard: [] } }));
@@ -206,7 +213,7 @@ export class TelegramService {
 
   private async handleAction(action: CallbackAction, decision: "approve" | "reject" | "generate", message: TelegramMessage) {
     const ownerId = action.connection.userId!;
-    const payload = action.payload as { pendingActionId?: string; report?: OperationalReportInput; previewToken?: string; planId?: string; summary?: ReplanSummary } | null;
+    const payload = action.payload as { pendingActionId?: string; report?: OperationalReportInput; previewToken?: string; planId?: string; summary?: ReplanSummary; terminalText?: string } | null;
     if (action.action === "DEMO_WEATHER_DECISION" && decision !== "generate") { await this.api("sendMessage", { chat_id: message.chat.id, reply_to_message_id: message.message_id, text: decision === "approve" ? "DEMO: Usulan perlindungan disetujui untuk simulasi. Misi, jadwal, dan Google Calendar tidak berubah." : "DEMO: Usulan perlindungan ditolak. Tidak ada data yang berubah." }); return; }
     if (action.action === "WEATHER_REPLAN" && decision === "generate") { await this.sendReplanProposal(ownerId, action.missionId!, message.chat.id, message.message_id, payload?.report); return; }
     if (action.action === "REPORT_DECISION" && payload?.pendingActionId && decision !== "generate") {
@@ -222,12 +229,19 @@ export class TelegramService {
     }
     if (action.action === "REPLAN_DECISION" && payload?.previewToken && payload.planId && decision !== "generate") {
       if (decision === "reject") { await this.api("sendMessage", { chat_id: message.chat.id, reply_to_message_id: message.message_id, text: "Usulan rencana ulang ditolak. Rencana aktif tidak berubah." }); return; }
-      const result = await this.missions.confirmReplan(ownerId, action.missionId!, { previewToken: payload.previewToken, planId: payload.planId });
-      const calendar = result.calendarSync.status === "SYNCED" ? "Google Calendar telah diperbarui." : result.calendarSync.status === "NOT_CONNECTED" ? "Google Calendar tidak terhubung. Jadwal di TUNAS tetap sudah diperbarui." : "Jadwal di TUNAS telah diperbarui, tetapi sinkronisasi Google Calendar belum berhasil. Coba sinkronkan kembali dari TUNAS.";
-      const details = payload.summary ? [payload.summary.workers ? `• Pekerja: ${payload.summary.workers} orang` : null, payload.summary.harvest ? `• Panen: ${payload.summary.harvest}` : null, payload.summary.drying ? `• Mulai pengeringan: ${payload.summary.drying}` : null].filter(Boolean).join("\n") : "";
+      const result = await this.missions.confirmReplan(ownerId, action.missionId!, { previewToken: payload.previewToken, planId: payload.planId, syncCalendar: false });
+      const calendar = "Sinkronisasi Google Calendar sedang diproses.";
+      const changedSchedule = payload.summary?.changes?.map((change) => `• ${change.title}: ${formatMoment(change.after)}`) ?? [];
+      const details = payload.summary ? [payload.summary.workers ? `• Pekerja: ${payload.summary.workers} orang` : null, payload.summary.harvest ? `• Panen: ${payload.summary.harvest}` : null, payload.summary.drying ? `• Mulai pengeringan: ${payload.summary.drying}` : null, ...changedSchedule].filter(Boolean).join("\n") : "";
       const plainText = `Replan disetujui\n\nJadwal ${payload.summary?.missionName ?? "misi aktif"} telah diperbarui${details ? `:\n${details}` : "."}\n\nKegiatan yang sudah selesai tetap dipertahankan.\nMisi tetap aktif.\n\n${calendar}`;
+      if (action.telegramActionId) await this.bestEffort("store replan result", () => this.repository.updateActionPayload(action.telegramActionId!, { ...payload, terminalText: plainText }));
       try { await this.api("sendMessage", { chat_id: message.chat.id, reply_to_message_id: message.message_id, text: `<b>✅ Replan disetujui</b>${escapeHtml(plainText.slice("Replan disetujui".length))}`, parse_mode: "HTML" }); }
       catch { await this.bestEffort("send replan decision fallback", () => this.api("sendMessage", { chat_id: message.chat.id, text: plainText })); }
+      try {
+        const synced = await this.missions.syncCalendar(ownerId);
+        const text = synced === null ? "Google Calendar tidak terhubung. Jadwal di TUNAS tetap sudah diperbarui." : synced.failed ? "Jadwal di TUNAS sudah diperbarui, tetapi sinkronisasi Google Calendar belum berhasil sepenuhnya." : "Google Calendar telah diperbarui.";
+        await this.bestEffort("send calendar result", () => this.api("sendMessage", { chat_id: message.chat.id, text }));
+      } catch { await this.bestEffort("send calendar failure", () => this.api("sendMessage", { chat_id: message.chat.id, text: "Jadwal di TUNAS sudah diperbarui, tetapi sinkronisasi Google Calendar belum berhasil." })); }
       return;
     }
     throw new ApiError(409, "Keputusan tidak cocok dengan tindakan ini.");
@@ -253,12 +267,13 @@ export class TelegramService {
     const schedulingDurations = mission.farm.schedulingDurations as { harvestMinutes?: unknown } | null;
     const previousMinutes = typeof constraint("harvestDurationMinutes") === "number" ? Number(constraint("harvestDurationMinutes")) : typeof schedulingDurations?.harvestMinutes === "number" ? schedulingDurations.harvestMinutes : undefined;
     const token = telegramToken();
-    const summary: ReplanSummary = { missionName, workers: proposedWorkers, harvest: harvest ? activityMoment(harvest) : undefined, drying: drying ? activityMoment(drying) : undefined };
+    const summary: ReplanSummary = { missionName, workers: proposedWorkers, harvest: harvest ? activityMoment(harvest) : undefined, drying: drying ? activityMoment(drying) : undefined, changes: "changes" in preview ? preview.changes : undefined };
     const pending = await this.repository.createAction({ telegramConnectionId: mission.farm.owner.telegramConnection.telegramConnectionId, farmId: mission.farmId, missionId, action: "REPLAN_DECISION", tokenHash: telegramTokenHash(token), expiresAt: new Date(Date.now() + ACTION_TTL_MS), payload: { previewToken: preview.previewToken, planId: recommended.planId, summary } });
     const activities = recommended.activities.map((item) => `• ${escapeHtml(actionKindLabel(item.actionKind))}: ${formatDate(item.startsOn)}${item.windowStart && item.windowEnd ? `, ${item.windowStart}–${item.windowEnd} WIB` : ""}${item.workers ? ` — ${item.workers} pekerja` : ""}`).join("\n");
     const changes = report?.reportType === "WORKER_AVAILABILITY_CHANGED" ? [`• Pekerja: ${previousWorkers} → ${proposedWorkers} orang`, previousMinutes && proposedMinutes ? `• Estimasi panen: ${formatHours(previousMinutes)} → ${formatHours(proposedMinutes)}` : null].filter(Boolean).join("\n") : null;
     const reasons = preview.recommendation.reasons.map((reason) => `• ${escapeHtml(localizePlanText(reason.text))}`).join("\n");
-    const text = `<b>🔄 Usulan perubahan rencana</b>\n${escapeHtml(missionName)}${changes ? `\n\n<b>Perubahan kondisi</b>\n${changes}` : ""}\n\n<b>Dampak</b>\nRencana aktif perlu disesuaikan dengan kondisi terbaru. Usulan ini telah diperiksa terhadap jam kerja dan batas waktu misi.\n\n<b>Jadwal yang diusulkan</b>\n${activities}\n\n<b>Alasan utama</b>\n${reasons}\n\nKegiatan yang sudah selesai tidak akan diubah.\n<b>Belum ada perubahan yang diterapkan.</b>`;
+    const scheduleChanges = summary.changes?.map((change) => `<b>${escapeHtml(change.title)}</b>\nSebelum: ${formatMoment(change.before)}\nSesudah: ${formatMoment(change.after)}`).join("\n\n");
+    const text = `<b>🔄 Usulan perubahan rencana</b>\n${escapeHtml(missionName)}${changes ? `\n\n<b>Perubahan kondisi</b>\n${changes}` : ""}${scheduleChanges ? `\n\n<b>Perubahan jadwal</b>\n${scheduleChanges}` : ""}\n\n<b>Dampak</b>\nRencana aktif perlu disesuaikan dengan kondisi terbaru. Usulan ini telah diperiksa terhadap jam kerja dan batas waktu misi.\n\n<b>Jadwal yang diusulkan</b>\n${activities}\n\n<b>Alasan utama</b>\n${reasons}\n\nKegiatan yang sudah selesai dan sedang berjalan tidak akan diubah.\n<b>Belum ada perubahan yang diterapkan.</b>`;
     try { const sent = await this.api<{ message_id: number }>("sendMessage", { chat_id: chatId, reply_to_message_id: replyTo, text, parse_mode: "HTML", reply_markup: decisionKeyboard(token, "Setujui Replan") }); await this.repository.bindActionMessage(pending.telegramActionId, String(sent.message_id)); }
     catch (error) { await this.repository.deleteAction(pending.telegramActionId); throw error; }
   }
@@ -316,6 +331,7 @@ function actionKindLabel(kind: string) { return ({ CONFIRM_READINESS_WEATHER: "P
 function formatDate(value: Date | string) { return new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(value)); }
 function formatHours(minutes: number) { return `${new Intl.NumberFormat("id-ID", { maximumFractionDigits: 2 }).format(minutes / 60)} jam`; }
 function activityMoment(activity: { startsOn: Date | string; windowStart: string | null; windowEnd: string | null }) { return `${formatDate(activity.startsOn)}${activity.windowStart ? `, ${activity.windowStart}${activity.windowEnd ? `–${activity.windowEnd}` : ""} WIB` : ""}`; }
+function formatMoment(moment: { date: string; start: string | null; end: string | null }) { return `${formatDate(moment.date)}${moment.start ? `, ${moment.start}${moment.end ? `–${moment.end}` : ""} WIB` : ""}`; }
 function reportLabel(type: string) { return ({ ACTIVITY_STARTED: "Kegiatan dimulai", ACTIVITY_COMPLETED: "Kegiatan selesai", ACTUAL_QUANTITY_REPORTED: "Jumlah aktual", WORKER_AVAILABILITY_CHANGED: "Ketersediaan pekerja", BUYER_REQUIREMENT_CHANGED: "Kebutuhan pembeli", DRYING_RESOURCE_CHANGED: "Sumber daya pengeringan", RAIN_OR_FIELD_EVENT: "Hujan atau kejadian lapangan", MISSION_DEVIATION: "Penyimpangan misi", GENERAL_OPERATIONAL_NOTE: "Catatan operasional" } as Record<string, string>)[type] ?? type; }
 function localizePlanText(value: string) { return value.replace(/Candidate\s+(\d+)/gi, "Pilihan $1").replace(/Harvest shallots/gi, "Panen bawang merah").replace(/Begin and inspect drying/gi, "Mulai dan periksa pengeringan").replace(/Harvest starts ([^;]+); drying follows harvest\./gi, "Panen dimulai $1; pengeringan dilakukan setelah panen.").replace(/Zero percent precipitation probability minimizes harvest risk\./gi, "Peluang hujan nol persen meminimalkan risiko panen."); }
 function reportDetails(report: { reportType?: string; payload?: unknown }) {

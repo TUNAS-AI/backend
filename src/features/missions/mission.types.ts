@@ -6,31 +6,35 @@ export type MissionCloseoutInput = { actualHarvestKg: number; actualDriedKg: num
 export type MessageInput = { role: "farmer" | "assistant"; content: string };
 export type FactProvenance = "FARMER_REPORTED" | "INFERRED";
 export type FactConfidence = "high" | "medium" | "low";
-export type MissionFactKey = "fieldBlockId" | "cropBatchIds" | "marketQuality" | "plannedHarvestKg" | "plannedDriedKg" | "deadline" | "harvestDurationHours" | "estimatedHarvestableKg" | "rainProtectionAvailable" | "availableWorkerCount" | "coveredDryingCapacityKg" | "notes";
+export type MissionFactKey = Exclude<keyof MissionFact, "clarification">;
 export type MissionFactReview = { key: MissionFactKey; status: "confirmed" | "needs_clarification" | "missing"; reason: string; provenance: FactProvenance; confidence: FactConfidence };
 export type MissionFact = {
   fieldBlockId: string | null;
   cropBatchIds: string[];
-  marketQuality: "Grade A" | "Grade B" | "Grade C" | null;
+  readinessConfirmed: boolean | null;
+  destination: "IMMEDIATE_SALE" | "CONSUMPTION_STORAGE" | "SEED_STOCK" | null;
   plannedHarvestKg: number | null;
-  plannedDriedKg: number | null;
-  deadline: string | null;
-  harvestDurationHours: number | null;
-  estimatedHarvestableKg: number | null;
-  rainProtectionAvailable: boolean | null;
-  availableWorkerCount: number | null;
-  coveredDryingCapacityKg: number | null;
+  deadlineAt: string | null;
   notes: string | null;
+  workers?: number | null;
+  harvestDurationMinutes?: number | null;
   clarification: { key: string; question: string } | null;
 };
 export type FactBlock = { key: string; value: unknown; provenance: FactProvenance; confidence: FactConfidence };
 export type MissionInterpretation = { facts: MissionFact; review: MissionFactReview[] };
 export type MissionManualOptions = { timezone: string; fieldBlocks: Array<{ fieldBlockId: string; name: string }>; cropBatches: Array<{ cropBatchId: string; fieldBlockId: string; label: string }> };
+export type DryingProfile = { method: "FIELD_SUN" | "RACK_SUN" | "COVERED_VENTILATED" | "INSTORE"; capacityKg: number; protectedCapacityKg: number; minDays: number; maxDays: number };
+export type SchedulingDurations = { readinessCheckMinutes: number; harvestMinutes: number; transferToDryingMinutes: number; beginDryingMinutes: number; dryingInspectionMinutes: number };
 export type MissionCandidate = { previewId: string; messages: MessageInput[]; facts: MissionFact; review: MissionFactReview[]; blocks: FactBlock[]; manualOptions?: MissionManualOptions };
+export type ScheduleEdit =
+  | { type: "SHIFT_ACTIVITY"; missionStepId: string; deltaMinutes: number }
+  | { type: "SHIFT_DATE"; fromDate: string; toDate: string };
+export type ScheduleChange = { missionStepId: string; actionKind: PlannedActivity["actionKind"]; title: string; before: { date: string; start: string | null; end: string | null }; after: { date: string; start: string | null; end: string | null } };
 export type PlannedActivity = {
+  actionKind: "CONFIRM_READINESS_WEATHER" | "PREPARE_CREW_TOOLS" | "HARVEST" | "BUNDLE_COLLECT" | "TRANSFER_TO_DRYING" | "SET_UP_DRYING" | "BEGIN_DRYING" | "TURN_OR_REARRANGE" | "INSPECT_DRYING" | "DEPLOY_RAIN_PROTECTION" | "REMOVE_RAIN_PROTECTION" | "CONFIRM_DRYING_COMPLETE";
   title: string;
   description: string;
-  scheduleType: "DAILY_WINDOW" | "DATE_RANGE";
+  scheduleType: "DAILY_WINDOW" | "CONDITION_GATE";
   startsOn: string;
   endsOn: string;
   windowStart: string | null;
@@ -39,8 +43,13 @@ export type PlannedActivity = {
   isConditional: boolean;
   stage: "HARVESTING" | "DRYING";
   targetHarvestKg?: number | null;
+  workers?: number | null;
+  quantityKg?: number | null;
+  dependsOn?: number[];
+  resourceDemands?: Array<{ resource: string; amount: number; unit: "person" | "kg" | "vehicle" }>;
 };
-export type GeneratedPlan = { planId?: string; name: string; summary: string; recommended: boolean; evidence?: string[]; tradeoffs?: string[]; assumptions: string[]; risks: Record<string, string>; dryingEstimateDays: number; dryingEstimateReason: string; activities: PlannedActivity[] };
-export type PlanInfeasibility = { code: "MISSING_WORKING_HOURS" | "QUANTITY_UNAVAILABLE" | "NO_DRY_HARVEST_WINDOW" | "DEADLINE_UNREACHABLE" | "DRYING_RAIN_UNPROTECTED"; reason: string; details: Record<string, unknown> };
-export type PlanningResult = { plans: GeneratedPlan[]; infeasibility: PlanInfeasibility | null };
+export type PlanEvidence = { evidenceId: string; source: "WEATHER" | "MISSION_CONSTRAINT" | "RESOURCE" | "DEPENDENCY"; rule: string; passed: boolean; value: string | number | boolean | null };
+export type GeneratedPlan = { planId?: string; name: string; summary: string; recommended: boolean; evidence?: PlanEvidence[]; tradeoffs?: string[]; assumptions: string[]; risks: Record<string, string>; dryingEstimateDays: number; dryingEstimateMinDays: number; dryingEstimateMaxDays: number; dryingEstimateReason: string; weatherStatus: "VERIFIED" | "WEATHER_UNVERIFIED"; activities: PlannedActivity[] };
+export type PlanInfeasibility = { code: "NEEDS_INPUT" | "NOT_READY" | "MISSING_WORKING_HOURS" | "QUANTITY_UNAVAILABLE" | "RESOURCE_CAPACITY" | "NO_HARVEST_WINDOW" | "DEADLINE_UNREACHABLE"; reason: string; details: Record<string, unknown> };
+export type PlanningResult = { status: "READY_TO_PLAN" | "NEEDS_INPUT" | "INFEASIBLE" | "WEATHER_UNVERIFIED"; plans: GeneratedPlan[]; infeasibility: PlanInfeasibility | null };
 export type CloseoutSummary = { summary: string; lessons: string[] };

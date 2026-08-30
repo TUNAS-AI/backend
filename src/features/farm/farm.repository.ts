@@ -8,6 +8,8 @@ function data(input: FarmInput) { return {
   ...(input.notes !== undefined ? { notes: input.notes as string | null } : {}), ...(input.timezone !== undefined ? { timezone: input.timezone as string } : {}),
   ...(input.defaultWorkerCount !== undefined ? { defaultWorkerCount: input.defaultWorkerCount as number } : {}),
   ...(input.defaultWorkingHours !== undefined ? { defaultWorkingHours: input.defaultWorkingHours === null ? Prisma.JsonNull : input.defaultWorkingHours as Prisma.InputJsonValue } : {}),
+  ...(input.dryingProfile !== undefined ? { dryingProfile: input.dryingProfile === null ? Prisma.JsonNull : input.dryingProfile as Prisma.InputJsonValue } : {}),
+  ...(input.schedulingDurations !== undefined ? { schedulingDurations: input.schedulingDurations as Prisma.InputJsonValue } : {}),
 }; }
 export class FarmRepository {
   async findByOwner(ownerId: string) { const farm = await getPrisma().farm.findUnique({ where: { ownerId } }); return farm ? record(farm) : null; }

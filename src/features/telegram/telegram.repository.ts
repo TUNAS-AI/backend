@@ -46,6 +46,7 @@ export class TelegramRepository {
       include: {
         farm: { include: { owner: { include: { telegramConnection: true } } } },
         fieldBlock: true,
+        constraints: true,
         missionSteps: { where: { status: { in: ["SCHEDULED", "IN_PROGRESS"] }, stage: { in: ["HARVESTING", "DRYING"] } }, orderBy: { sequence: "asc" } },
       },
     });

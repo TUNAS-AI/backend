@@ -13,6 +13,17 @@ type AlertStep = { title: string; stage: string; startsOn: Date; endsOn: Date; w
 const localDate = (date: Date, timezone: string) => new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
 const weatherHours = (weather: Record<string, unknown>) => { const hourly = weather.hourly as { time?: unknown; precipitation_probability?: unknown; precipitation?: unknown } | undefined; const times = Array.isArray(hourly?.time) ? hourly.time.slice(0, 72) : []; return times.flatMap((time, index): WeatherHour[] => typeof time === "string" ? [{ time, probability: Number(Array.isArray(hourly?.precipitation_probability) ? hourly.precipitation_probability[index] : 0), precipitation: Number(Array.isArray(hourly?.precipitation) ? hourly.precipitation[index] : 0) }] : []); };
 export function rainImpact(hours: WeatherHour[], steps: AlertStep[], timezone: string) { return steps.flatMap((step) => { const start = localDate(step.startsOn, timezone); const end = localDate(step.endsOn, timezone); const rainy = hours.filter((hour) => { const day = hour.time.slice(0, 10); const time = hour.time.slice(11, 16); return hour.precipitation > 0.1 && day >= start && day <= end && (step.stage !== "HARVESTING" || (time >= (step.windowStart ?? "00:00") && time < (step.windowEnd ?? "24:00"))); }); return rainy.length ? [{ step, rainy }] : []; }); }
+const addDays = (date: Date, days: number) => new Date(date.getTime() + days * 86_400_000);
+export function simulatedRainScenario(steps: AlertStep[], timezone: string, now = new Date()) {
+  const source = steps.find((step) => step.stage === "HARVESTING") ?? steps.find((step) => step.stage === "DRYING");
+  const today = localDate(now, timezone); let date = localDate(source?.startsOn ?? addDays(now, 1), timezone);
+  while (date <= today) date = localDate(addDays(new Date(`${date}T12:00:00.000Z`), 7), timezone);
+  const sourceHour = Number(source?.windowStart?.slice(0, 2)); const startHour = Number.isInteger(sourceHour) ? Math.min(sourceHour, 21) : 8;
+  const rainStart = `${String(startHour).padStart(2, "0")}:00`; const rainEnd = `${String(startHour + 2).padStart(2, "0")}:00`;
+  const step: AlertStep = { title: source?.title ?? "Panen simulasi", stage: source?.stage === "DRYING" ? "DRYING" : "HARVESTING", startsOn: new Date(`${date}T00:00:00.000Z`), endsOn: new Date(`${date}T00:00:00.000Z`), windowStart: source?.stage === "DRYING" ? null : rainStart, windowEnd: source?.stage === "DRYING" ? null : rainEnd };
+  const weather = { hourly: { time: [`${date}T${rainStart}`, `${date}T${String(startHour + 1).padStart(2, "0")}:00`], precipitation_probability: [85, 85], precipitation: [1.8, 1.8] } };
+  return { step, weather, date, rainStart, rainEnd };
+}
 const action = (id: TunasAction["id"], label: string): TunasAction => ({ id, label });
 
 const pendingView = (pending: { pendingActionId: string; kind: string; status: string; preview: unknown }): OperationalPending => ({ pendingActionId: pending.pendingActionId, kind: pending.kind as OperationalPendingKind, status: pending.status, preview: pending.preview as { before: unknown; after: unknown }, actions: { approve: `/api/tunas/pending/${pending.pendingActionId}/approve`, reject: `/api/tunas/pending/${pending.pendingActionId}/reject` } });
@@ -85,13 +96,17 @@ export class TunasService {
   }
 
   async test(ownerId: string, missionId: string, scenario: "drying-rain" | "harvest-rain" | "irregular-rain") {
-    const farmId = await this.farmIdForOwner(ownerId); const mission = await this.repository.activeMission(farmId, missionId);
-    if (!mission) throw new ApiError(409, "Misi aktif dengan kegiatan panen atau pengeringan diperlukan untuk demo ini.");
-    const step = mission.missionSteps.find((item) => item.stage === (scenario === "drying-rain" ? "DRYING" : "HARVESTING")) ?? mission.missionSteps[0];
-    const config = scenario === "drying-rain" ? { content: "Demo: hujan diperkirakan mengenai pengeringan. Lindungi bawang sebelum hujan.", actions: [] } : scenario === "harvest-rain" ? { content: "Demo: hujan diperkirakan mengenai waktu panen. Tinjau ulang jadwal panen.", actions: [action("reschedule", "Atur ulang"), action("keep", "Pertahankan rencana")] } : { content: "Demo: pola hujan berubah selama misi. Tinjau ulang jadwal panen dan pengeringan.", actions: [action("regenerate", "Buat 3 rencana"), action("keep", "Pertahankan rencana")] };
+    const farmId = await this.farmIdForOwner(ownerId); const [farm, mission] = await Promise.all([this.repository.farm(farmId), this.repository.activeDemoMission(farmId, missionId)]);
+    if (!mission) throw new ApiError(409, "Misi aktif diperlukan untuk demo ini.");
+    if (!mission.fieldBlock) throw new ApiError(409, "Misi memerlukan blok lahan untuk simulasi cuaca.");
+    const simulated = simulatedRainScenario(mission.missionSteps, farm.timezone);
+    await this.repository.saveWeather(farmId, mission.fieldBlock.fieldBlockId, simulated.weather, "demo-simulated-forecast");
+    const [affected] = rainImpact(weatherHours(simulated.weather), [simulated.step], farm.timezone);
+    if (!affected) throw new ApiError(503, "Prakiraan demo tidak mengenai jendela kegiatan.");
+    const config = { content: `Demo: hujan ${simulated.date} ${simulated.rainStart}-${simulated.rainEnd} mengenai ${affected.step.title}.`, actions: [] };
     const message = await this.repository.createMessage({ farmId, missionId: mission.missionId, kind: scenario, content: config.content, actions: config.actions });
     let sent: Awaited<ReturnType<TelegramService["sendAlert"]>>;
-    try { sent = await this.telegram.sendAlert({ ownerId, missionId, demo: true, change: scenario === "irregular-rain" ? "Prakiraan menunjukkan pola hujan tidak menentu selama misi." : "Prakiraan menunjukkan hujan pada waktu kegiatan berlangsung.", activity: step.title, impact: step.stage === "DRYING" ? "Bawang yang sedang dikeringkan berisiko terkena hujan." : "Jendela panen berisiko terganggu hujan.", recommendation: step.stage === "DRYING" ? "Tutup atau pindahkan bawang ke tempat terlindung." : "Tinjau waktu panen agar tidak terkena hujan." }); }
+    try { sent = await this.telegram.sendAlert({ ownerId, missionId, demo: true, change: `Hujan diperkirakan ${simulated.date}, ${simulated.rainStart}-${simulated.rainEnd} WIB`, activity: affected.step.title, impact: affected.step.stage === "DRYING" ? "Pengeringan luar ruang berisiko terkena hujan." : "Jendela panen berisiko terganggu hujan.", recommendation: "Periksa kondisi satu jam sebelumnya, siapkan terpal, lalu periksa kembali setelah hujan.", forecast: { date: simulated.date, start: simulated.rainStart, end: simulated.rainEnd, precipitation: 1.8, probability: 85 } }); }
     catch (error) { await this.repository.deleteMessage(farmId, message.tunasMessageId); throw error; }
     await this.repository.markTelegramSent(farmId, message.tunasMessageId, sent.telegramMessageId);
     return { ...(await this.repository.messages(farmId)), delivered: true, telegramMessageId: sent.telegramMessageId };

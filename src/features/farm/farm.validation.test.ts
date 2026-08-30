@@ -17,3 +17,9 @@ test("rejects overlapping default work windows", () => {
     (error: unknown) => error instanceof Error && error.message === "defaultWorkingHours.monday ranges must not overlap",
   );
 });
+
+test("accepts positive whole scheduling durations", () => {
+  const durations = { readinessCheckMinutes: 15, harvestMinutes: 360, transferToDryingMinutes: 30, beginDryingMinutes: 15, dryingInspectionMinutes: 30 };
+  assert.deepEqual(parseFarm({ schedulingDurations: durations }, false).schedulingDurations, durations);
+  assert.throws(() => parseFarm({ schedulingDurations: { ...durations, harvestMinutes: 1.5 } }, false), /schedulingDurations.harvestMinutes/);
+});

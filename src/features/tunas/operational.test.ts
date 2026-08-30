@@ -62,8 +62,8 @@ test("interaction identity accepts externalMessageId or Idempotency-Key", () => 
 });
 
 test("strictly validates every report payload and structured interaction shape", () => {
-  const valid = { reportType: "WORKER_AVAILABILITY_CHANGED", observedAt: updatedAt.toISOString(), payload: { availableWorkers: 0 } };
-  assert.deepEqual(operationalReportSchema.parse(valid).payload, { availableWorkers: 0 });
+  const valid = { reportType: "WORKER_AVAILABILITY_CHANGED", observedAt: updatedAt.toISOString(), payload: { availableWorkers: 3, estimatedHarvestMinutes: 450 } };
+  assert.deepEqual(operationalReportSchema.parse(valid).payload, { availableWorkers: 3, estimatedHarvestMinutes: 450 });
   assert.equal(operationalReportSchema.safeParse({ ...valid, payload: { availableWorkers: 1.5 } }).success, false);
   assert.equal(operationalReportSchema.safeParse({ ...valid, payload: { availableWorkers: 1, productivity: 4 } }).success, false);
   assert.throws(() => parseInteraction({ message: "x", report: valid, externalMessageId: "both" }, undefined), /exactly one/);
@@ -86,7 +86,9 @@ test("evaluates only specified operational impacts", () => {
   assert.equal(reportImpact({ reportType: "GENERAL_OPERATIONAL_NOTE", observedAt: updatedAt.toISOString(), payload: { text: "ok" } }, mission as never).level, "NONE");
   assert.equal(reportImpact({ reportType: "BUYER_REQUIREMENT_CHANGED", observedAt: updatedAt.toISOString(), payload: { targetQuantityKg: 90, quantityBasis: "DRIED" } }, mission as never).level, "MATERIAL");
   const active = { ...mission, missionSteps: [{ ...mission.missionSteps[0], status: "IN_PROGRESS" }] };
-  assert.equal(reportImpact({ reportType: "WORKER_AVAILABILITY_CHANGED", observedAt: updatedAt.toISOString(), payload: { availableWorkers: 0 } }, active as never).level, "MATERIAL");
+  const workers = reportImpact({ reportType: "WORKER_AVAILABILITY_CHANGED", observedAt: updatedAt.toISOString(), payload: { availableWorkers: 3, estimatedHarvestMinutes: 450 } }, active as never);
+  assert.equal(workers.level, "MATERIAL");
+  assert.equal(workers.replanSupported, true);
   const rain = reportImpact({ reportType: "RAIN_OR_FIELD_EVENT", observedAt: "2026-08-28T08:00:00.000Z", payload: { event: "hujan", observedAt: "2026-08-28T08:00:00.000Z" } }, active as never);
   assert.equal(rain.level, "MATERIAL");
   assert.equal(rain.replanSupported, true);

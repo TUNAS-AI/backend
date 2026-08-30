@@ -53,14 +53,13 @@ test("preserves timestamp milliseconds in replan concurrency tokens", () => {
   assert.equal(missionVersionTimestamp(new Date("2026-08-28T15:31:42.347Z")), "2026-08-28T15:31:42.347Z");
 });
 
-test("projects an explicitly typed buyer quantity into matching replan facts", async () => {
-  const facts = { fieldBlockId: "field", cropBatchIds: ["batch"], marketQuality: "Grade A" as const, plannedHarvestKg: 80, plannedDriedKg: 70, deadline: "2026-09-01", harvestDurationHours: 8, estimatedHarvestableKg: 80, rainProtectionAvailable: true, availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: null };
+test("projects a buyer quantity into the MVP harvest target", async () => {
+  const facts = { fieldBlockId: "field", cropBatchIds: ["batch"], readinessConfirmed: true, destination: "IMMEDIATE_SALE" as const, plannedHarvestKg: 80, deadlineAt: "2026-09-01T00:00:00.000Z", notes: null, clarification: null };
   let received: typeof facts | undefined;
   const service = { replanDraft: async () => ({ previewId: "preview", messages: [{ role: "farmer" as const, content: "mission" }], facts, review: [], blocks: [] }), replanPreview: async (_ownerId: string, _missionId: string, candidate: { facts: typeof facts }) => { received = candidate.facts; return { status: "infeasible" as const, missionId: "mission", blockers: [] }; } } as unknown as MissionService;
-  await MissionService.prototype.replanFromReport.call(service, "owner", "mission", { reportType: "BUYER_REQUIREMENT_CHANGED", observedAt: new Date().toISOString(), payload: { targetQuantityKg: 65, quantityBasis: "DRIED", deadline: "2026-08-30" } });
-  assert.equal(received?.plannedHarvestKg, 80);
-  assert.equal(received?.plannedDriedKg, 65);
-  assert.equal(received?.deadline, "2026-08-30");
+  await MissionService.prototype.replanFromReport.call(service, "owner", "mission", { reportType: "BUYER_REQUIREMENT_CHANGED", observedAt: new Date().toISOString(), payload: { targetQuantityKg: 65, quantityBasis: "DRIED", buyerPickupAt: "2026-08-30T08:00:00.000Z" } });
+  assert.equal(received?.plannedHarvestKg, 65);
+  assert.equal(received?.deadlineAt, "2026-08-30T08:00:00.000Z");
 });
 
 test("carries observed rain into a report-driven replan", async () => {
@@ -70,6 +69,43 @@ test("carries observed rain into a report-driven replan", async () => {
   await MissionService.prototype.replanFromReport.call(service, "owner", "mission", { reportType: "RAIN_OR_FIELD_EVENT", observedAt, payload: { event: "hujan", observedAt } });
   assert.equal(received?.[3], "id");
   assert.equal(received?.[4], observedAt);
+});
+
+test("projects farmer-reported worker facts into a replan", async () => {
+  const facts = { fieldBlockId: "field", cropBatchIds: ["batch"], readinessConfirmed: true, destination: "IMMEDIATE_SALE" as const, plannedHarvestKg: 500, deadlineAt: "2026-09-01T00:00:00.000Z", notes: null, clarification: null };
+  let received: typeof facts & { workers?: number | null; harvestDurationMinutes?: number | null } | undefined;
+  const service = { replanDraft: async () => ({ previewId: "preview", messages: [{ role: "farmer" as const, content: "mission" }], facts, review: [], blocks: [] }), replanPreview: async (_ownerId: string, _missionId: string, candidate: { facts: typeof received }) => { received = candidate.facts; return { status: "infeasible" as const, missionId: "mission", blockers: [] }; } } as unknown as MissionService;
+  await MissionService.prototype.replanFromReport.call(service, "owner", "mission", { reportType: "WORKER_AVAILABILITY_CHANGED", observedAt: new Date().toISOString(), payload: { availableWorkers: 3, estimatedHarvestMinutes: 450 } });
+  assert.equal(received?.workers, 3);
+  assert.equal(received?.harvestDurationMinutes, 450);
+});
+
+test("confirms a schedule edit with nullable optional facts and strict step data", async () => {
+  const previous = process.env.MISSION_PREVIEW_SECRET; process.env.MISSION_PREVIEW_SECRET = "test-secret";
+  const stepId = "00000000-0000-4000-8000-000000000010";
+  const mission = {
+    missionId: "mission", farmId: "farm", fieldBlockId: "field", status: "ACTIVE", stage: "WAITING", approvedPlanId: "old-plan", revision: 4, updatedAt: new Date("2026-08-29T01:00:00Z"), originalMessage: "Panen Blok Utara", notes: null,
+    messages: [{ role: "farmer", content: "Panen Blok Utara" }], cropBatches: [{ cropBatchId: "batch" }],
+    constraints: [{ key: "readinessConfirmed", value: true }, { key: "destination", value: "IMMEDIATE_SALE" }, { key: "plannedHarvestKg", value: 80 }, { key: "deadlineAt", value: "2026-08-31T09:00:00.000Z" }],
+    missionSteps: [{ missionStepId: stepId, sequence: 1, status: "SCHEDULED", actionKind: "CONFIRM_READINESS_WEATHER", title: "Check readiness", description: "Check readiness", scheduleType: "DAILY_WINDOW", startsOn: new Date("2026-08-29T00:00:00Z"), endsOn: new Date("2026-08-29T00:00:00Z"), windowStart: "06:00", windowEnd: "06:15", timezone: "Asia/Jakarta", isConditional: false, stage: "HARVESTING", targetHarvestKg: null, quantityKg: null, dependencies: [], resourceDemands: [], calendarSyncStatus: "SYNCED", googleCalendarEventId: "private-calendar-id" }],
+  };
+  const context = { farm: { timezone: "Asia/Jakarta", defaultWorkingHours: { saturday: [{ start: "06:00", end: "16:00" }] }, dryingProfile: {}, schedulingDurations: {}, owner: { displayName: "Owner", locale: "id", timezone: "Asia/Jakarta" }, name: "Farm", location: "", notes: null, defaultWorkerCount: 2 }, fields: [{ fieldBlockId: "field", name: "Blok Utara", latitude: 0, longitude: 0 }], cropBatches: [{ cropBatchId: "batch", fieldBlockId: "field", crop: "shallot", variety: null }], history: [] };
+  let replacement: Record<string, unknown> | undefined;
+  const repository = { find: async () => mission, context: async () => context, replaceConfirmedPlan: async (input: Record<string, unknown>) => { replacement = input; return mission; } };
+  const agent = { interpretScheduleEdit: async () => ({ edit: { type: "SHIFT_ACTIVITY" as const, missionStepId: stepId, deltaMinutes: 120 }, question: null }) };
+  const service = new MissionService(repository as never, agent as never, async () => "farm", async () => ({ hourly: {} }), { syncIfConnected: async () => null } as never);
+  try {
+    const preview = await service.replanFromInstruction("owner", "mission", "tunda pemeriksaan dua jam");
+    assert.equal(preview.status, "feasible");
+    if (preview.status !== "feasible") return;
+    const signed = verifyPreview<{ exp: number; plans: Array<{ activities: Array<Record<string, unknown>> }>; candidate: { blocks: Array<{ key: string }> } }>(preview.previewToken);
+    assert.equal("calendarSyncStatus" in signed.plans[0].activities[0], false);
+    assert.equal("googleCalendarEventId" in signed.plans[0].activities[0], false);
+    assert.equal(signed.candidate.blocks.some((block) => block.key === "workers" || block.key === "harvestDurationMinutes"), false);
+    await service.confirmReplan("owner", "mission", { previewToken: preview.previewToken, planId: preview.recommendation.planId, syncCalendar: false });
+    assert.equal(replacement?.expectedRevision, 4);
+    assert.deepEqual((replacement?.blocks as Array<{ key: string }>).map((block) => block.key).sort(), ["cropBatchIds", "deadlineAt", "destination", "fieldBlockId", "plannedHarvestKg", "readinessConfirmed"].sort());
+  } finally { if (previous === undefined) delete process.env.MISSION_PREVIEW_SECRET; else process.env.MISSION_PREVIEW_SECRET = previous; }
 });
 
 test("uses only the selected field's six latest closeouts as planning history", () => {
@@ -117,8 +153,8 @@ test("logs only safe metadata for invalid planner output", () => {
 test("discards browser-provided mission review and fact blocks", () => {
   const candidate = parsePreviewCandidate({ candidate: {
     previewId: "00000000-0000-4000-8000-000000000001", messages: [{ role: "farmer", content: "Harvest shallots" }],
-    facts: { fieldBlockId: "00000000-0000-4000-8000-000000000002", cropBatchIds: ["00000000-0000-4000-8000-000000000003"], marketQuality: "Grade A", plannedHarvestKg: 80, plannedDriedKg: 70, deadline: "2026-07-23", harvestDurationHours: 8, estimatedHarvestableKg: 80, rainProtectionAvailable: true, availableWorkerCount: null, coveredDryingCapacityKg: null, notes: null, clarification: null },
-    review: [{ key: "deadline", status: "confirmed", reason: "forged", provenance: "INFERRED", confidence: "high" }], blocks: [{ key: "deadline", value: "forged", provenance: "INFERRED", confidence: "high" }],
+    facts: { fieldBlockId: "00000000-0000-4000-8000-000000000002", cropBatchIds: ["00000000-0000-4000-8000-000000000003"], readinessConfirmed: true, destination: "IMMEDIATE_SALE", plannedHarvestKg: 80, deadlineAt: "2026-08-23T00:00:00.000Z", notes: null, clarification: null },
+    review: [{ key: "deadlineAt", status: "confirmed", reason: "forged", provenance: "INFERRED", confidence: "high" }], blocks: [{ key: "deadlineAt", value: "forged", provenance: "INFERRED", confidence: "high" }],
   } });
   assert.deepEqual(candidate.review, []);
   assert.deepEqual(candidate.blocks, []);
