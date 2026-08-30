@@ -18,6 +18,12 @@ export class TelegramQueryService {
     catch (error) { logTelegramRouteFailure(error); return deterministicTelegramRoute(message, activeWorkflow) ?? { intent: "UNKNOWN" as const, continuation: false }; }
   }
 
+  async answer(ownerId: string, message: string, intent?: TelegramIntent) {
+    const farmId = await this.farmIdForOwner(ownerId);
+    const result = await this.graph.invoke({ farmId, question: message, ...(intent ? { intent } : {}) });
+    return result.answer;
+  }
+
   async respond(ownerId: string, message: string, externalMessageId: string, responseMessage: string, trigger: string): Promise<TunasState> {
     const farmId = await this.farmIdForOwner(ownerId);
     const started = await this.repository.beginInteraction({ farmId, missionId: null, channel: "telegram", externalMessageId, message });
@@ -53,6 +59,7 @@ export class TelegramQueryService {
     }
   }
 }
+
 
 function logTelegramRouteFailure(error: unknown) {
   console.warn("Telegram routing stage failed", { stage: "route_intent", kind: error instanceof Error ? error.name : "unknown_error" });

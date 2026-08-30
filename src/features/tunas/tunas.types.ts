@@ -6,5 +6,6 @@ import type { OperationalImpact, OperationalReportInput } from "./operational-re
 export type OperationalPendingKind = "CLARIFICATION" | "MISSION_NOTES" | "MISSION_STAGE" | "MISSION_STEP_STATUS" | "CLOSEOUT" | "OPERATIONAL_REPORT";
 export type SemanticAction = { type: "APPROVE_REPORT" | "REJECT_REPORT" | "OPEN_REPLAN"; missionId: string | null; pendingActionId?: string };
 export type OperationalPending = { pendingActionId: string; kind: OperationalPendingKind; status: string; preview: { before: unknown; after: unknown }; actions: { approve: string; reject: string }; semanticActions?: SemanticAction[] };
-export type TunasState = { threadId: string; interactionId: string; missionId: string | null; trigger: string; message: string; pendingAction: OperationalPending | null; impact?: OperationalImpact | null; semanticActions?: SemanticAction[] };
-export type InteractionInput = { message: string; report?: OperationalReportInput; missionId: string | null; channel: string; externalMessageId: string; forcedTrigger?: "UPDATE" };
+export type ReplanPreview = Awaited<ReturnType<import("../missions/mission.service").MissionService["replanFromInstruction"]>>;
+export type TunasState = { threadId: string; interactionId: string; missionId: string | null; trigger: string; message: string; pendingAction: OperationalPending | null; impact?: OperationalImpact | null; semanticActions?: SemanticAction[]; transient?: boolean; replan?: ReplanPreview };
+export type InteractionInput = { message: string; report?: OperationalReportInput; missionId: string | null; channel: string; externalMessageId: string; forcedTrigger?: "UPDATE"; replanContext?: string[] };

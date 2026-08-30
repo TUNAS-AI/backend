@@ -13,6 +13,7 @@ router.post("/test-alerts/:scenario", tunasController.test);
 router.post("/interactions", tunasController.interact);
 router.post("/pending/:pendingActionId/approve", tunasController.approve);
 router.post("/pending/:pendingActionId/reject", tunasController.reject);
+router.post("/pending/:pendingActionId/cancel", tunasController.cancel);
 router.get("/missions/:id/timeline", tunasController.timeline);
 router.get("/missions/:id/reports", tunasController.reports);
 export default router;

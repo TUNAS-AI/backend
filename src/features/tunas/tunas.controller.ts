@@ -14,6 +14,7 @@ export const tunasController = {
   interact: respond((request) => service.interact(owner(request), parseInteraction(request.body, request.get("Idempotency-Key")))),
   approve: respond((request) => service.approve(owner(request), parsePendingActionId(request.params.pendingActionId))),
   reject: respond((request) => service.reject(owner(request), parsePendingActionId(request.params.pendingActionId))),
+  cancel: respond((request) => service.cancel(owner(request), parsePendingActionId(request.params.pendingActionId), "web")),
   timeline: respond((request) => service.timeline(owner(request), uuid(request.params.id, "id"))),
   reports: respond((request) => service.reports(owner(request), uuid(request.params.id, "id"))),
 };

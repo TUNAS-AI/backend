@@ -73,11 +73,15 @@ export class TunasRepository {
 
   async interactions(farmId: string) {
     return getPrisma().operationalInteraction.findMany({
-      where: { farmId, status: "COMPLETED", response: { not: Prisma.DbNull } },
+      where: { farmId, channel: "web", status: "COMPLETED", response: { not: Prisma.DbNull }, OR: [{ trigger: "UPDATE" }, { pendingActions: { some: {} } }] },
       select: { operationalInteractionId: true, message: true, response: true, createdAt: true, completedAt: true },
       orderBy: { createdAt: "asc" },
       take: 50,
     });
+  }
+
+  async openPendingForChannel(farmId: string, channel: string) {
+    return getPrisma().pendingAction.findFirst({ where: { farmId, status: "PENDING", thread: { channel } }, orderBy: { createdAt: "desc" } });
   }
 
   async beginInteraction(input: { farmId: string; missionId: string | null; channel: string; externalMessageId: string; message: string }) {

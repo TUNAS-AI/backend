@@ -7,6 +7,9 @@ import { Command, isInterrupted } from "@langchain/langgraph";
 import { getOperationalGraph, type ResumePayload } from "../../agent/operational-agent";
 import type { InteractionInput, OperationalPending, OperationalPendingKind, TunasState } from "./tunas.types";
 import { TelegramService } from "../telegram/telegram.service";
+import { TelegramQueryService } from "../telegram/telegram-query.service";
+import { MissionService } from "../missions/mission.service";
+import { randomUUID } from "node:crypto";
 
 type WeatherHour = { time: string; probability: number; precipitation: number };
 type AlertStep = { title: string; stage: string; startsOn: Date; endsOn: Date; windowStart: string | null; windowEnd: string | null };
@@ -29,7 +32,7 @@ const action = (id: TunasAction["id"], label: string): TunasAction => ({ id, lab
 const pendingView = (pending: { pendingActionId: string; kind: string; status: string; preview: unknown }): OperationalPending => ({ pendingActionId: pending.pendingActionId, kind: pending.kind as OperationalPendingKind, status: pending.status, preview: pending.preview as { before: unknown; after: unknown }, actions: { approve: `/api/tunas/pending/${pending.pendingActionId}/approve`, reject: `/api/tunas/pending/${pending.pendingActionId}/reject` } });
 
 export class TunasService {
-  constructor(private readonly repository = new TunasRepository(), private readonly farmIdForOwner = callerFarmId, private readonly forecast = getOpenMeteoForecast, private readonly telegram = new TelegramService()) {}
+  constructor(private readonly repository = new TunasRepository(), private readonly farmIdForOwner = callerFarmId, private readonly forecast = getOpenMeteoForecast, private readonly telegram = new TelegramService(), private readonly queries = new TelegramQueryService(repository, farmIdForOwner), private readonly missions = new MissionService()) {}
 
   async messages(ownerId: string) { return this.repository.messages(await this.farmIdForOwner(ownerId)); }
   async interactions(ownerId: string) { return { interactions: await this.repository.interactions(await this.farmIdForOwner(ownerId)) }; }
@@ -114,6 +117,7 @@ export class TunasService {
   }
 
   async interact(ownerId: string, input: InteractionInput): Promise<TunasState> {
+    if (input.channel === "web" && !input.report && !input.forcedTrigger) return this.converse(ownerId, input);
     const farmId = await this.farmIdForOwner(ownerId);
     let mission = input.missionId ? await this.repository.mission(farmId, input.missionId) : await this.repository.currentMission(farmId);
     if (input.missionId && !mission) throw new ApiError(404, "Mission not found");
@@ -137,6 +141,34 @@ export class TunasService {
     }
   }
 
+  private async converse(ownerId: string, input: InteractionInput): Promise<TunasState> {
+    const farmId = await this.farmIdForOwner(ownerId);
+    const open = await this.repository.openPendingForChannel(farmId, "web");
+    const route = await this.queries.route(ownerId, input.message, open?.kind === "CLARIFICATION" ? "REPORT" : null);
+    if (open?.kind === "CLARIFICATION") {
+      if (route.intent === "CANCEL") return this.cancel(ownerId, open.pendingActionId, "web");
+      return this.interact(ownerId, { ...input, missionId: open.missionId, forcedTrigger: "UPDATE" });
+    }
+    if (open) return this.transient(input.missionId, "PENDING", "Finish or reject the pending report before starting another request.");
+    if (route.intent === "REPORT") return this.interact(ownerId, { ...input, forcedTrigger: "UPDATE" });
+    if (route.intent === "REPLAN") {
+      const mission = input.missionId ? await this.repository.mission(farmId, input.missionId) : await this.repository.currentMission(farmId);
+      if (!mission) return this.transient(null, "REPLAN", "There is no active mission to replan.");
+      const messages = [...(input.replanContext ?? []), input.message].slice(-8);
+      const replan = await this.missions.replanFromInstruction(ownerId, mission.missionId, messages.join("\n"));
+      const message = replan.status === "clarification" ? replan.question : replan.status === "infeasible" ? replan.blockers.join(" ") : "Review this proposed mission schedule. Nothing changes until you approve it.";
+      return { ...this.transient(mission.missionId, "REPLAN", message), replan };
+    }
+    if (route.intent === "CANCEL") return this.transient(input.missionId, "CANCEL", "There is no pending workflow to cancel.");
+    const prompt = route.intent === "STATUS" ? `Berikan status ringkas misi aktif. ${input.message}` : input.message;
+    const message = route.intent === "UNKNOWN" ? "I did not understand that. Ask a question, report a field change, or request a replan." : await this.queries.answer(ownerId, prompt, route.intent === "STATUS" ? "FACTUAL_QUERY" : undefined);
+    return this.transient(input.missionId, route.intent, message);
+  }
+
+  private transient(missionId: string | null, trigger: string, message: string): TunasState {
+    return { threadId: "transient", interactionId: randomUUID(), missionId, trigger, message, pendingAction: null, transient: true };
+  }
+
   async approve(ownerId: string, pendingActionId: string): Promise<TunasState> {
     const farmId = await this.farmIdForOwner(ownerId); const pending = await this.repository.pending(farmId, pendingActionId);
     if (!pending) throw new ApiError(404, "Pending action not found");
@@ -152,11 +184,11 @@ export class TunasService {
     return this.resumePending(pending, "REJECTION");
   }
 
-  async cancel(ownerId: string, pendingActionId: string): Promise<TunasState> {
+  async cancel(ownerId: string, pendingActionId: string, channel = "telegram"): Promise<TunasState> {
     const farmId = await this.farmIdForOwner(ownerId); const pending = await this.repository.pending(farmId, pendingActionId);
     if (!pending) throw new ApiError(404, "Pending action not found");
     if (pending.status !== "PENDING") return this.pendingState(pending, `Pending action is already ${pending.status.toLowerCase()}.`);
-    const cancelled = await this.repository.resolvePending({ pendingActionId, status: "REJECTED", channel: "telegram", resolution: { reason: "farmer_cancelled" } });
+    const cancelled = await this.repository.resolvePending({ pendingActionId, status: "REJECTED", channel, resolution: { reason: "farmer_cancelled" } });
     return this.pendingState(cancelled as typeof pending, "Pending workflow cancelled.");
   }
 

@@ -224,9 +224,16 @@ and saved weather snapshots to suppress unchanged or irrelevant forecasts.
 
 ## Operational API
 
-`GET /api/tunas/interactions` returns completed durable conversation history.
+`GET /api/tunas/interactions` returns durable web workflow history only: reports,
+clarifications, and pending decisions. Ordinary web questions and answers are
+ephemeral and are not stored as conversation history.
 `POST /api/tunas/interactions` accepts exactly one of `message` or `report`, plus
-`missionId?`, `channel?`, and `externalMessageId?`. A structured report has
+`missionId?`, `channel?`, `externalMessageId?`, and an optional bounded
+`replanContext` for a web replan clarification. Web messages use the same
+deterministic-first intent router and grounded farm query graph as Telegram.
+Queries return a transient response, reports enter the durable operational graph,
+and replans return the existing signed mission preview for authenticated approval.
+A structured report has
 `reportType`, ISO `observedAt`, a strict report-specific `payload`, and optional
 `missionStepId`, `fieldBlockId`, `cropBatchId`, `narrative`, and
 `supersedesReportId`. Structured reports bypass AI but use the same checkpointed
@@ -237,8 +244,9 @@ returns the stored `TunasState` on retries. Pending responses include
 `pendingActionId`, `kind`, `status`, `preview.before`, `preview.after`, and approve
 and reject endpoint paths.
 
-Approve or reject with `POST /api/tunas/pending/:pendingActionId/approve` and
-`POST /api/tunas/pending/:pendingActionId/reject`. Approval revalidates mission
+Approve, reject, or cancel with `POST /api/tunas/pending/:pendingActionId/approve`,
+`POST /api/tunas/pending/:pendingActionId/reject`, and
+`POST /api/tunas/pending/:pendingActionId/cancel`. Approval revalidates mission
 state and applies no mutation if stale. Clarification and approval are durable
 LangGraph interrupts; follow-up interactions and approve/reject actions resume
 the same checkpointed thread. Free-form routing uses bounded Gemini structured

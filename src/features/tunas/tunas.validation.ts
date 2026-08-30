@@ -29,7 +29,8 @@ export function parseInteraction(value: unknown, idempotencyKey: unknown) {
   if (externalMessageId.length > 200) throw new ApiError(400, "externalMessageId is too long");
   const parsed = body.report === undefined ? undefined : operationalReportSchema.safeParse(body.report);
   if (parsed && !parsed.success) throw new ApiError(400, `report is invalid: ${parsed.error.issues[0]?.message ?? "invalid payload"}`);
-  return { message, report: parsed?.data, missionId, channel, externalMessageId };
+  const replanContext = body.replanContext === undefined ? undefined : Array.isArray(body.replanContext) ? body.replanContext.map((item) => text(item, "replanContext item")).slice(-8) : (() => { throw new ApiError(400, "replanContext is invalid"); })();
+  return { message, report: parsed?.data, missionId, channel, externalMessageId, replanContext };
 }
 
 export function parsePendingActionId(value: unknown) { return uuid(value, "pendingActionId"); }
