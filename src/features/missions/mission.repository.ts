@@ -4,13 +4,47 @@ import { getPrisma } from "../../infrastructure/prisma";
 import type { FactBlock, GeneratedPlan, MessageInput, MissionFact, MissionRecord } from "./mission.types";
 
 const record = (value: unknown) => value as MissionRecord;
-const details = { messages: { orderBy: { createdAt: "asc" } }, constraints: true, cropBatches: { include: { cropBatch: true } }, planningRuns: { orderBy: { createdAt: "desc" }, include: { plans: { include: { steps: { orderBy: { sequence: "asc" } } } } } }, missionSteps: { orderBy: { sequence: "asc" } }, closeout: true } as const;
+const details = { fieldBlock: { select: { fieldBlockId: true, name: true } }, messages: { orderBy: { createdAt: "asc" } }, constraints: true, cropBatches: { include: { cropBatch: true } }, planningRuns: { orderBy: { createdAt: "desc" }, include: { plans: { include: { steps: { orderBy: { sequence: "asc" } } } } } }, missionSteps: { orderBy: { sequence: "asc" } }, closeout: true } as const;
 export const missionConfirmationTransactionOptions = { timeout: 15_000 } as const;
 const listDetails = {
-  missionId: true, fieldBlockId: true, status: true, stage: true, originalMessage: true, createdAt: true,
+  missionId: true, fieldBlockId: true, approvedPlanId: true, status: true, stage: true, originalMessage: true, createdAt: true,
+  fieldBlock: { select: { fieldBlockId: true, name: true } },
+  constraints: { where: { key: { in: ["plannedHarvestKg", "destination", "deadlineAt"] as string[] } }, select: { key: true, value: true } },
+  plans: { select: { planId: true, name: true } },
   cropBatches: { select: { cropBatchId: true, cropBatch: { select: { cropBatchId: true, variety: true } } } },
   missionSteps: { orderBy: { sequence: "asc" }, select: { missionStepId: true, sequence: true, title: true, description: true, actionKind: true, scheduleType: true, startsOn: true, endsOn: true, windowStart: true, windowEnd: true, timezone: true, isConditional: true, stage: true, status: true, targetHarvestKg: true } },
 } as const;
+
+function listRecord(value: Prisma.MissionGetPayload<{ select: typeof listDetails }>) {
+  const constraint = (key: string) => value.constraints.find((item) => item.key === key)?.value;
+  const plannedHarvestKg = constraint("plannedHarvestKg");
+  const destination = constraint("destination");
+  const deadlineAt = constraint("deadlineAt");
+  return record({
+    ...value,
+    plannedHarvestKg: typeof plannedHarvestKg === "number" ? plannedHarvestKg : null,
+    destination: typeof destination === "string" ? destination : null,
+    deadlineAt: typeof deadlineAt === "string" ? deadlineAt : null,
+    approvedPlanName: value.plans.find((plan) => plan.planId === value.approvedPlanId)?.name ?? null,
+    constraints: undefined,
+    plans: undefined,
+  });
+}
+
+function detailRecord(value: Prisma.MissionGetPayload<{ include: typeof details }>) {
+  const constraint = (key: string) => value.constraints.find((item) => item.key === key)?.value;
+  const plannedHarvestKg = constraint("plannedHarvestKg");
+  const destination = constraint("destination");
+  const deadlineAt = constraint("deadlineAt");
+  const plans = value.planningRuns.flatMap((run) => run.plans);
+  return record({
+    ...value,
+    plannedHarvestKg: typeof plannedHarvestKg === "number" ? plannedHarvestKg : null,
+    destination: typeof destination === "string" ? destination : null,
+    deadlineAt: typeof deadlineAt === "string" ? deadlineAt : null,
+    approvedPlanName: plans.find((plan) => plan.planId === value.approvedPlanId)?.name ?? null,
+  });
+}
 
 export function planCreateData(missionId: string, planningRunId: string, plan: GeneratedPlan) {
   return { missionId, planningRunId, name: plan.name, summary: plan.summary, recommended: plan.recommended, assumptions: plan.assumptions as Prisma.InputJsonValue, risks: plan.risks as Prisma.InputJsonValue, dryingEstimateDays: plan.dryingEstimateDays, dryingEstimateReason: plan.dryingEstimateReason, steps: { create: plan.activities.map((activity, sequence) => ({ sequence: sequence + 1, title: activity.title, description: activity.description, actionKind: activity.actionKind, scheduleType: activity.scheduleType, startsOn: new Date(`${activity.startsOn}T00:00:00.000Z`), endsOn: new Date(`${activity.endsOn}T00:00:00.000Z`), windowStart: activity.windowStart, windowEnd: activity.windowEnd, timezone: activity.timezone, isConditional: activity.isConditional, stage: activity.stage, targetHarvestKg: activity.targetHarvestKg ?? null, quantityKg: activity.quantityKg ?? null, dependencies: (activity.dependsOn ?? []) as Prisma.InputJsonValue, resourceDemands: (activity.resourceDemands ?? []) as Prisma.InputJsonValue })) } };
@@ -23,8 +57,8 @@ function snapshot(facts: MissionFact, workingHours: Prisma.InputJsonValue, weath
 }
 
 export class MissionRepository {
-  async list(farmId: string) { return (await getPrisma().mission.findMany({ where: { farmId }, select: listDetails, orderBy: { createdAt: "desc" } })).map(record); }
-  async current(farmId: string) { const value = await getPrisma().mission.findFirst({ where: { farmId, status: { in: ["ACTIVE", "CLOSEOUT"] } }, include: details, orderBy: { updatedAt: "desc" } }); return value ? record(value) : null; }
+  async list(farmId: string) { return (await getPrisma().mission.findMany({ where: { farmId }, select: listDetails, orderBy: { createdAt: "desc" } })).map(listRecord); }
+  async current(farmId: string) { const value = await getPrisma().mission.findFirst({ where: { farmId, status: { in: ["ACTIVE", "CLOSEOUT"] } }, include: details, orderBy: { updatedAt: "desc" } }); return value ? detailRecord(value) : null; }
   async calendar(farmId: string, from: Date, to: Date) {
     return (await getPrisma().missionStep.findMany({
       where: { mission: { farmId, approvedPlanId: { not: null } }, scheduleType: "DAILY_WINDOW", status: { in: ["SCHEDULED", "IN_PROGRESS"] }, startsOn: { lte: to }, endsOn: { gte: from } },
@@ -32,7 +66,7 @@ export class MissionRepository {
       orderBy: [{ startsOn: "asc" }, { sequence: "asc" }],
     })).map(record);
   }
-  async find(farmId: string, missionId: string) { const value = await getPrisma().mission.findFirst({ where: { farmId, missionId }, include: details }); return value ? record(value) : null; }
+  async find(farmId: string, missionId: string) { const value = await getPrisma().mission.findFirst({ where: { farmId, missionId }, include: details }); return value ? detailRecord(value) : null; }
   async delete(farmId: string, missionId: string) { return (await getPrisma().mission.deleteMany({ where: { farmId, missionId } })).count === 1; }
 
   async context(farmId: string, fieldBlockId?: string | null) {

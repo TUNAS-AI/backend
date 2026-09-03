@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { missionConfirmationTransactionOptions, planCreateData } from "./mission.repository";
 
@@ -17,4 +18,18 @@ test("keeps each generated activity nested under its own plan", () => {
   assert.equal("dryingEstimateMinDays" in data, false);
   assert.equal("dryingEstimateMaxDays" in data, false);
   assert.equal("weatherStatus" in data, false);
+});
+
+test("mission list projects operational summary facts without exposing raw constraints", async () => {
+  const repository = await readFile("src/features/missions/mission.repository.ts", "utf8");
+  for (const field of ["plannedHarvestKg", "destination", "deadlineAt", "approvedPlanName", "fieldBlock"]) assert.match(repository, new RegExp(field));
+  assert.match(repository, /constraints: undefined/);
+  assert.match(repository, /plans: undefined/);
+});
+
+test("mission detail projects operational summary facts from constraints", async () => {
+  const repository = await readFile("src/features/missions/mission.repository.ts", "utf8");
+  assert.match(repository, /function detailRecord/);
+  assert.match(repository, /return value \? detailRecord\(value\) : null/g);
+  assert.match(repository, /fieldBlock: \{ select: \{ fieldBlockId: true, name: true \} \}/);
 });
